@@ -1,0 +1,11 @@
+{% extends "emails/v1/base.txt" %}
+{% block content %}
+COMPASS appointment update
+
+Action: {{ action }}
+Status: {{ status }}
+{% if reference_code %}Reference: {{ reference_code }}
+{% endif %}{% if counselor_name %}Counselor: {{ counselor_name }}
+{% endif %}
+Open COMPASS to view the current appointment information.
+{% endblock %}

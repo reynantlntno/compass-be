@@ -1,0 +1,22 @@
+{% extends "documents/print/base_governed_document.html" %}
+{% block document_content %}
+{% if not public_service_guide.has_approved_revision %}
+<p>How to Access Services</p>
+<h1>Service guide is not yet available</h1>
+<p>The office has not published approved service guide information yet. Please use the public navigation or contact page for current, verified information.</p>
+{% else %}
+<h1>{{ public_service_guide.title }}</h1>
+<p>{{ public_service_guide.summary }}</p>
+<p><strong>Revision:</strong> {{ public_service_guide.version_label }} &middot; <strong>Publication:</strong> {{ public_service_guide.publication_state }}</p>
+<p><strong>Readiness:</strong> {{ public_service_guide.readiness.display_state }}{% if not public_service_guide.readiness.official %}. {{ public_service_guide.readiness.pending_notice }} This is not an official copy yet.{% endif %}</p>
+{% for entry in public_service_guide.entries %}
+<section class="service-guide-entry" id="{{ entry.anchor }}">
+    <h2>{{ entry.label }}</h2>
+    <p>{{ entry.description }}</p>
+    <p><strong>Availability:</strong> {{ entry.availability_label }}</p>
+    {% if entry.steps %}<ol>{% for step in entry.steps %}<li><strong>{{ step.label }}</strong> — {{ step.description }}</li>{% endfor %}</ol>{% endif %}
+    <dl>{% for field in entry.fields.values %}<dt>{{ field.label }}</dt><dd>{{ field.value }}</dd>{% endfor %}</dl>
+</section>
+{% endfor %}
+{% endif %}
+{% endblock %}

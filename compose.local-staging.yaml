@@ -1,0 +1,360 @@
+# COMPASS local staging is a standalone, production-like rehearsal stack.
+# It does not extend compose.yaml or compose.staging.yaml and shares no
+# containers, volumes, networks, ports, or Podman secret resources with the
+# normal development or OCI staging deployments.
+
+x-app-environment: &app-environment
+  DJANGO_SETTINGS_MODULE: config.settings.local_staging
+  COMPASS_ENVIRONMENT: staging
+  COMPASS_LOCAL_STAGING: "True"
+  COMPASS_LOCAL_STAGING_ACKNOWLEDGED: "True"
+  COMPASS_ACCESS_MODE: ${COMPASS_ACCESS_MODE:-health_only}
+  COMPASS_ALLOW_DEMO_SEEDING: "True"
+  COMPASS_SECRET_PREFIX: compass-local-staging
+  COMPASS_SECRET_ENV_DIR: /run/secrets
+  COMPASS_SECRET_ENV_INCLUDE_TURNSTILE_SECRET: "True"
+  COMPASS_SECRET_ENV_INCLUDE_EMAIL_SECRET: "False"
+  COMPASS_SECRET_ENV_INCLUDE_ECOUNSELING_SECRET: ${COMPASS_LOCAL_STAGING_DAILY_ENABLED:-False}
+  DEBUG: "False"
+  ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,web,proxy}
+  CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-https://localhost:3000,https://localhost:8443}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://localhost:3000}
+  CORS_ALLOW_CREDENTIALS: ${CORS_ALLOW_CREDENTIALS:-False}
+  CACHE_URL: ${CACHE_URL:-redis://redis:6379/0}
+  TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
+  COMPASS_RELEASE_VERSION: ${COMPASS_RELEASE_VERSION:?COMPASS_RELEASE_VERSION is required}
+  COMPASS_BUILD_ID: ${COMPASS_BUILD_ID:?COMPASS_BUILD_ID is required}
+  COMPASS_API_BASE_URL: ${COMPASS_API_BASE_URL:-https://localhost:8443}
+  COMPASS_CLIENT_BASE_URL: ${COMPASS_CLIENT_BASE_URL:-https://localhost:3000}
+  KEY_SOURCE_PROVIDER: podman_secret
+  KEY_SOURCE_PODMAN_SECRETS_DIR: /run/secrets
+  PROTECTED_STORAGE_BACKEND: s3
+  PROTECTED_STORAGE_S3_ENDPOINT_URL: http://minio:9000
+  PROTECTED_STORAGE_S3_BUCKET_NAME: ${PROTECTED_STORAGE_S3_BUCKET_NAME:-compass-private-local-staging}
+  PROTECTED_STORAGE_S3_USE_SSL: "False"
+  PROTECTED_STORAGE_S3_REGION_NAME: us-east-1
+  PROTECTED_STORAGE_S3_ADDRESSING_STYLE: path
+  BACKUP_STORAGE_BACKEND: s3_compatible
+  BACKUP_STORAGE_S3_ENDPOINT_URL: http://minio:9000
+  BACKUP_STORAGE_S3_BUCKET: ${BACKUP_STORAGE_S3_BUCKET:-compass-backups-local-staging}
+  BACKUP_STORAGE_S3_USE_SSL: "False"
+  BACKUP_STORAGE_S3_REGION_NAME: us-east-1
+  BACKUP_STORAGE_S3_ADDRESSING_STYLE: path
+  BACKUP_LOCAL_DEMO_ROOT: /var/lib/compass-backup-work
+  BACKUP_RESTORE_EXECUTION_MODE: dry_run_only
+  BACKUP_ARCHIVE_MAX_BYTES: ${BACKUP_ARCHIVE_MAX_BYTES:-4294967296}
+  BACKUP_LEGACY_FERNET_MAX_BYTES: ${BACKUP_LEGACY_FERNET_MAX_BYTES:-67108864}
+  ECOUNSELING_PROVIDER: ${ECOUNSELING_PROVIDER:-disabled}
+  ECOUNSELING_PROVIDER_MODE: ${ECOUNSELING_PROVIDER_MODE:-DAILY_CLOUD}
+  ECOUNSELING_DAILY_DOMAIN: ${ECOUNSELING_DAILY_DOMAIN:-demo-compass.daily.co}
+  ECOUNSELING_DAILY_WEBHOOK_ID: ${ECOUNSELING_DAILY_WEBHOOK_ID:-}
+  ECOUNSELING_DAILY_WEBHOOK_URL: ${ECOUNSELING_DAILY_WEBHOOK_URL:-}
+  ECOUNSELING_ROOM_PREFIX: ${ECOUNSELING_ROOM_PREFIX:-compass-local-ecs}
+  ECOUNSELING_REQUIRE_PROVIDER_AUTH_IN_PRODUCTION: "True"
+  ECOUNSELING_UNSAFE_PROVIDER_MODE_ACKNOWLEDGED: "False"
+  ACCOUNT_SECURITY_CAPTCHA_ADAPTER: apps.account_security.captcha.CloudflareTurnstileAdapter
+  ACCOUNT_SECURITY_CAPTCHA_PROVIDER: turnstile
+  ACCOUNT_SECURITY_TURNSTILE_SITE_KEY: ${ACCOUNT_SECURITY_TURNSTILE_SITE_KEY:-1x00000000000000000000AA}
+  ACCOUNT_SECURITY_TURNSTILE_HOSTNAMES: localhost
+  CSP_ENABLED: "False"
+  CSP_SCRIPT_SRC: https://challenges.cloudflare.com
+  CSP_FRAME_SRC: https://challenges.cloudflare.com
+  EMAIL_HOST: mailpit
+  EMAIL_PORT: "1025"
+  EMAIL_USE_TLS: "False"
+  EMAIL_USE_SSL: "False"
+  EMAIL_HOST_USER: ""
+  DEFAULT_FROM_EMAIL: noreply@local.invalid
+  COMPASS_EMAIL_REPLY_TO: reply-to@local.invalid
+  COMPASS_EMAIL_VERIFIED_SENDER_DOMAIN: local.invalid
+  MAINTENANCE_ENFORCEMENT_ENABLED: ${MAINTENANCE_ENFORCEMENT_ENABLED:-False}
+  DOCUMENT_PDF_RENDERER_ENABLED: ${DOCUMENT_PDF_RENDERER_ENABLED:-False}
+  DOCUMENT_PDF_RENDERER_TIMEOUT_MS: ${DOCUMENT_PDF_RENDERER_TIMEOUT_MS:-30000}
+  ACCOUNT_SECURITY_CAPTCHA_TIMEOUT_SECONDS: ${ACCOUNT_SECURITY_CAPTCHA_TIMEOUT_SECONDS:-5}
+  EMAIL_TIMEOUT: ${EMAIL_TIMEOUT:-10}
+  NOTIFICATION_WORKER_ENABLED: ${NOTIFICATION_WORKER_ENABLED:-False}
+  NOTIFICATION_WORKER_INTERVAL_SECONDS: ${NOTIFICATION_WORKER_INTERVAL_SECONDS:-5}
+  NOTIFICATION_WORKER_BATCH_SIZE: ${NOTIFICATION_WORKER_BATCH_SIZE:-20}
+  NOTIFICATION_WORKER_LOCK_TIMEOUT_SECONDS: ${NOTIFICATION_WORKER_LOCK_TIMEOUT_SECONDS:-300}
+  BACKUP_WORKER_POLL_INTERVAL_SECONDS: ${BACKUP_WORKER_POLL_INTERVAL_SECONDS:-15}
+  REPORT_SYNC_MAX_OUTPUT_BYTES: ${REPORT_SYNC_MAX_OUTPUT_BYTES:-262144}
+  REPORT_SYNC_MAX_WORK_UNITS: ${REPORT_SYNC_MAX_WORK_UNITS:-1000}
+  REPORT_ASYNC_AFTER_WORK_UNITS: ${REPORT_ASYNC_AFTER_WORK_UNITS:-3000}
+  REPORT_RUN_TIMEOUT_SECONDS: ${REPORT_RUN_TIMEOUT_SECONDS:-60}
+  REPORT_EXPORT_MAX_OUTPUT_BYTES: ${REPORT_EXPORT_MAX_OUTPUT_BYTES:-8388608}
+  PROTECTED_STORAGE_MAX_FILE_SIZE_BYTES: ${PROTECTED_STORAGE_MAX_FILE_SIZE_BYTES:-10485760}
+  COMPASS_ONBOARDING_CATALOG_VERSION: local-staging-v1
+  COMPASS_ONBOARDING_ALLOW_DEMO_CATALOG: "True"
+  COMPASS_DEMO_IT_ADMIN_EMAIL: ${COMPASS_DEMO_IT_ADMIN_EMAIL:-}
+  COMPASS_DEMO_HEAD_GUIDANCE_EMAIL: ${COMPASS_DEMO_HEAD_GUIDANCE_EMAIL:-}
+  COMPASS_DEMO_COUNSELOR_EMAIL: ${COMPASS_DEMO_COUNSELOR_EMAIL:-}
+  COMPASS_DEMO_GCO_STAFF_EMAIL: ${COMPASS_DEMO_GCO_STAFF_EMAIL:-}
+  COMPASS_DEMO_STUDENT_EMAIL: ${COMPASS_DEMO_STUDENT_EMAIL:-}
+
+x-app-secrets: &app-secrets
+  - compass-local-staging-secret-key
+  - compass-local-staging-audit-hash-secret
+  - compass-local-staging-account-security-hash-secret
+  - compass-local-staging-account-activation-token-secret
+  - compass-local-staging-database-url
+  - compass-local-staging-protected-storage-s3-access-key
+  - compass-local-staging-protected-storage-s3-secret-key
+  - compass-local-staging-backup-storage-s3-access-key
+  - compass-local-staging-backup-storage-s3-secret-key
+  - compass-local-staging-field-encryption-key
+  - compass-local-staging-account-security-turnstile-secret
+  - compass-local-staging-email-host-password
+  - compass-local-staging-ecounseling-daily-api-key
+  - compass-local-staging-ecounseling-daily-webhook-secret
+  - compass-local-staging-ecounseling-room-salt
+
+x-app-service: &app-service
+  build:
+    context: .
+    dockerfile: Containerfile
+  image: ${COMPASS_IMAGE_REF:-localhost/compass:local-staging}
+  entrypoint: ["/usr/local/bin/compass-secret-env"]
+  environment: *app-environment
+  secrets: *app-secrets
+  restart: unless-stopped
+
+services:
+  db:
+    image: docker.io/library/postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-compass_local_staging}
+      POSTGRES_USER: ${POSTGRES_USER:-compass}
+      POSTGRES_PASSWORD_FILE: /run/secrets/compass-local-staging-postgres-password
+    volumes:
+      - compass_local_staging_pgdata:/var/lib/postgresql/data
+    secrets:
+      - compass-local-staging-postgres-password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-compass} -d ${POSTGRES_DB:-compass_local_staging}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: docker.io/library/redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - compass_local_staging_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  minio:
+    image: docker.io/minio/minio:latest
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - >-
+        export MINIO_ROOT_USER="$$(cat /run/secrets/compass-local-staging-protected-storage-s3-access-key)";
+        export MINIO_ROOT_PASSWORD="$$(cat /run/secrets/compass-local-staging-protected-storage-s3-secret-key)";
+        exec minio server /data --console-address :9001
+    ports:
+      - "${COMPASS_LOCAL_STAGING_MINIO_PORT:-9100}:9000"
+      - "${COMPASS_LOCAL_STAGING_MINIO_CONSOLE_PORT:-9101}:9001"
+    volumes:
+      - compass_local_staging_minio:/data
+    secrets:
+      - compass-local-staging-protected-storage-s3-access-key
+      - compass-local-staging-protected-storage-s3-secret-key
+    restart: unless-stopped
+
+  minio-init:
+    image: docker.io/minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        root_user="$$(cat /run/secrets/compass-local-staging-protected-storage-s3-access-key)"
+        root_password="$$(cat /run/secrets/compass-local-staging-protected-storage-s3-secret-key)"
+        backup_user="$$(cat /run/secrets/compass-local-staging-backup-storage-s3-access-key)"
+        backup_password="$$(cat /run/secrets/compass-local-staging-backup-storage-s3-secret-key)"
+        until /usr/bin/mc alias set local http://minio:9000 "$$root_user" "$$root_password" >/dev/null 2>&1; do sleep 1; done
+        /usr/bin/mc mb "local/${PROTECTED_STORAGE_S3_BUCKET_NAME:-compass-private-local-staging}" --ignore-existing >/dev/null
+        /usr/bin/mc mb "local/${BACKUP_STORAGE_S3_BUCKET:-compass-backups-local-staging}" --ignore-existing >/dev/null
+        /usr/bin/mc admin user add local "$$backup_user" "$$backup_password" >/dev/null 2>&1 || true
+        /usr/bin/mc admin policy attach local readwrite --user "$$backup_user" >/dev/null 2>&1 || true
+    secrets:
+      - compass-local-staging-protected-storage-s3-access-key
+      - compass-local-staging-protected-storage-s3-secret-key
+      - compass-local-staging-backup-storage-s3-access-key
+      - compass-local-staging-backup-storage-s3-secret-key
+
+  mailpit:
+    image: docker.io/axllent/mailpit:latest
+    ports:
+      - "${COMPASS_LOCAL_STAGING_SMTP_PORT:-1125}:1025"
+      - "${COMPASS_LOCAL_STAGING_MAILPIT_PORT:-8125}:8025"
+    restart: unless-stopped
+
+  web:
+    <<: *app-service
+    command:
+      - /bin/sh
+      - -ec
+      - >-
+        python manage.py migrate --noinput &&
+        python manage.py sync_notification_templates &&
+        python manage.py collectstatic --noinput &&
+        exec gunicorn config.wsgi:application
+        --bind 0.0.0.0:8000
+        --workers ${GUNICORN_WORKERS:-2}
+        --timeout ${GUNICORN_TIMEOUT_SECONDS:-60}
+        --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT_SECONDS:-30}
+        --max-requests ${GUNICORN_MAX_REQUESTS:-1000}
+        --max-requests-jitter ${GUNICORN_MAX_REQUESTS_JITTER:-100}
+        --access-logfile -
+        --access-logformat '%({X-Forwarded-For}i)s %(U)s %(m)s %(s)s'
+        --error-logfile -
+        --capture-output
+    volumes:
+      - compass_local_staging_static:/app/staticfiles
+      - compass_local_staging_media:/app/media
+      - ./deploy/compass-secret-env.sh:/usr/local/bin/compass-secret-env:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; request=urllib.request.Request(\"http://127.0.0.1:8000/health/\", headers={\"X-Forwarded-Proto\":\"https\"}); urllib.request.urlopen(request, timeout=3)' "]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    stop_grace_period: 45s
+
+  backup-worker:
+    <<: *app-service
+    command: ["python", "manage.py", "process_backup_jobs", "--loop"]
+    environment:
+      <<: *app-environment
+      BACKUP_WORKER_ENABLED: "True"
+    volumes:
+      - compass_local_staging_backup_work:/var/lib/compass-backup-work
+      - ./deploy/compass-secret-env.sh:/usr/local/bin/compass-secret-env:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "case \"$$(tr '\\000' ' ' </proc/1/cmdline)\" in *process_backup_jobs*--loop*) exit 0 ;; *) exit 1 ;; esac"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  notification-worker:
+    <<: *app-service
+    command: ["python", "manage.py", "process_notification_queue", "--loop"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "case \"$$(tr '\\000' ' ' </proc/1/cmdline)\" in *process_notification_queue*--loop*) exit 0 ;; *) exit 1 ;; esac"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  ecounseling-recording-worker:
+    <<: *app-service
+    command: ["python", "manage.py", "monitor_ecounseling_recordings", "--loop", "--interval", "5"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "case \"$$(tr '\\000' ' ' </proc/1/cmdline)\" in *monitor_ecounseling_recordings*--loop*) exit 0 ;; *) exit 1 ;; esac"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  proxy:
+    image: docker.io/library/caddy:2-alpine
+    depends_on:
+      web:
+        condition: service_healthy
+    ports:
+      - "${COMPASS_LOCAL_STAGING_PORT:-8443}:443"
+    volumes:
+      - ./deploy/caddy/local-staging.Caddyfile:/etc/caddy/Caddyfile:ro
+      - compass_local_staging_static:/static:ro
+      - compass_local_staging_caddy_data:/data
+      - compass_local_staging_caddy_config:/config
+    restart: unless-stopped
+
+secrets:
+  compass-local-staging-postgres-password:
+    external: true
+  compass-local-staging-secret-key:
+    external: true
+  compass-local-staging-audit-hash-secret:
+    external: true
+  compass-local-staging-account-security-hash-secret:
+    external: true
+  compass-local-staging-account-activation-token-secret:
+    external: true
+  compass-local-staging-database-url:
+    external: true
+  compass-local-staging-protected-storage-s3-access-key:
+    external: true
+  compass-local-staging-protected-storage-s3-secret-key:
+    external: true
+  compass-local-staging-backup-storage-s3-access-key:
+    external: true
+  compass-local-staging-backup-storage-s3-secret-key:
+    external: true
+  compass-local-staging-field-encryption-key:
+    external: true
+  compass-local-staging-account-security-turnstile-secret:
+    external: true
+  compass-local-staging-email-host-password:
+    external: true
+  compass-local-staging-ecounseling-daily-api-key:
+    external: true
+  compass-local-staging-ecounseling-daily-webhook-secret:
+    external: true
+  compass-local-staging-ecounseling-room-salt:
+    external: true
+
+volumes:
+  compass_local_staging_pgdata:
+  compass_local_staging_redis:
+  compass_local_staging_minio:
+  compass_local_staging_static:
+  compass_local_staging_media:
+  compass_local_staging_backup_work:
+  compass_local_staging_caddy_data:
+  compass_local_staging_caddy_config:

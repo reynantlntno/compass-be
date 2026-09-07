@@ -1,0 +1,12 @@
+{% extends "emails/v1/base.txt" %}
+{% block content %}
+COMPASS referral update
+
+Action: {{ action }}
+Status: {{ status }}
+{% if reference_code %}Reference: {{ reference_code }}
+{% endif %}{% if student_name %}Student: {{ student_name }}
+{% endif %}{% if counselor_name %}Counselor: {{ counselor_name }}
+{% endif %}
+Open COMPASS to view the current safe referral status.
+{% endblock %}

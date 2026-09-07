@@ -1,0 +1,8 @@
+{% extends "emails/v1/base.txt" %}
+{% block content %}
+The Guidance and Counseling Office is replying to your COMPASS contact submission.
+
+{{ reply_body }}
+
+This message was sent by the Guidance and Counseling Office. Please reply to this email if you need to continue the conversation.
+{% endblock %}

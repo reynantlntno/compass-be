@@ -1,0 +1,17 @@
+{# Document generation test template - minimal placeholder for unit tests #}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ document_title|default:"Generated Document" }}</title>
+</head>
+<body>
+    <header>
+        <h1>{{ institution.legal_name|default:"Institution" }}</h1>
+        <h2>{{ office.office_name|default:"Office" }}</h2>
+    </header>
+    <main>
+        <p>{{ document_title|default:"Document" }}</p>
+    </main>
+</body>
+</html>

@@ -1,0 +1,1 @@
+"""Referral management command package."""

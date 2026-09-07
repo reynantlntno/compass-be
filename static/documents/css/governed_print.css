@@ -1,0 +1,81 @@
+@page { size: A4 portrait; margin: 0; }
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  color: #161616;
+  font-family: Arial, "Liberation Sans", Helvetica, sans-serif;
+  font-size: 10pt;
+  line-height: 1.35;
+}
+
+.governed-document-shell { margin: 16mm 16mm 14mm; }
+.governed-header { break-inside: avoid; text-align: center; }
+.governed-header__grid { align-items: center; display: grid; gap: 4mm; grid-template-columns: 26mm minmax(0, 1fr) 26mm; min-height: 22mm; }
+.governed-header__primary, .governed-header__secondary { align-items: center; display: flex; justify-content: center; min-height: 18mm; }
+.governed-header__identity { min-width: 0; }
+.governed-header__logo { max-height: 18mm; max-width: 26mm; object-fit: contain; }
+.governed-header__secondary-logo { max-height: 18mm; max-width: 24mm; object-fit: contain; }
+.governed-header__republic { font-size: 8pt; }
+.governed-header__institution { color: #741a1a; font-size: 14pt; font-weight: 700; letter-spacing: .2pt; text-transform: uppercase; }
+.governed-header__former { font-size: 7.5pt; font-style: italic; }
+.governed-header__address { font-size: 8.5pt; }
+.governed-header__office { color: #741a1a; font-size: 11pt; font-weight: 700; margin-top: 1mm; text-transform: uppercase; }
+.governed-header__contacts { display: flex; flex-wrap: wrap; font-size: 7pt; gap: 1mm 5mm; justify-content: center; margin-top: 2mm; }
+.governed-header__contact-label { font-weight: 700; }
+.governed-header__rule { border-bottom: 3px double #741a1a; margin: 3mm 0 5mm; }
+
+.governed-control { break-inside: avoid; margin-bottom: 6mm; text-align: center; }
+.governed-control__title { font-size: 15pt; font-weight: 700; letter-spacing: .3pt; text-transform: uppercase; }
+.governed-control__metadata { display: flex; flex-wrap: wrap; gap: 1mm 4mm; justify-content: center; font-size: 7.5pt; margin-top: 1.5mm; }
+.governed-control__note { color: #555; font-size: 7.5pt; font-style: italic; margin-top: 1.5mm; }
+.governed-preview-banner { border: 1px solid #741a1a; color: #741a1a; font-size: 8.5pt; font-weight: 700; letter-spacing: .5pt; margin: 3mm auto 0; max-width: 150mm; padding: 1.5mm 2mm; text-transform: uppercase; }
+
+.governed-content { overflow-wrap: anywhere; }
+.governed-content p { margin: 0 0 5mm; }
+.governed-content h2, .governed-content h3 { break-after: avoid; color: #741a1a; }
+.governed-table { border-collapse: collapse; font-size: 8.5pt; margin: 3mm 0 6mm; table-layout: fixed; width: 100%; }
+.governed-table thead { display: table-header-group; }
+.governed-table tr { break-inside: auto; page-break-inside: auto; }
+.governed-table th, .governed-table td { border: .35pt solid #222; overflow-wrap: anywhere; padding: 1.2mm 1.5mm; vertical-align: top; }
+.governed-table th { font-weight: 700; text-align: left; }
+.governed-table--compact th, .governed-table--compact td { padding: .8mm 1.1mm; }
+.governed-table__checkbox { display: inline-block; font-family: Arial, "Liberation Sans", sans-serif; font-size: 12pt; line-height: 1; min-width: 5mm; }
+.governed-field-group { margin: 0 0 5mm; }
+.governed-field-label { font-weight: 700; }
+.governed-blank-line { border-bottom: .35pt solid #444; display: inline-block; min-width: 35mm; }
+.governed-signatures { display: flex; flex-wrap: wrap; gap: 14mm; justify-content: flex-end; margin-top: 12mm; }
+.governed-signature { min-width: 55mm; text-align: center; }
+.governed-signature__line { border-bottom: .5pt solid #111; height: 10mm; }
+.governed-signature__name { font-weight: 700; margin-top: 1mm; }
+.governed-signature__title { font-size: 8pt; }
+.governed-signature-grid { display: grid; gap: 12mm; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 10mm; }
+.governed-signature-grid > div { border-top: .5pt solid #111; padding-top: 1.5mm; text-align: center; }
+.governed-muted { color: #555; }
+.governed-confidential { border: .5pt solid #741a1a; color: #741a1a; font-size: 7.5pt; font-weight: 700; margin: 0 0 4mm; padding: 1.5mm; text-align: center; text-transform: uppercase; }
+
+.governed-footer { break-inside: avoid; margin-top: 8mm; }
+.governed-footer__row { align-items: center; border-top: 3px double #741a1a; display: flex; flex-wrap: wrap; gap: 2mm 4mm; justify-content: center; padding-top: 2mm; }
+.governed-footer__row img { max-height: 12mm; max-width: 32mm; object-fit: contain; }
+
+@media print {
+  .governed-header__contacts { font-size: 6.5pt; }
+}
+
+/* Students' Profile retains the students_profile_aggregate natural-flow table boundary. */
+.students-profile-report .profiling-cover-page { break-after: page; page-break-after: always; }
+.students-profile-report .profiling-section { margin: 0 0 7mm; }
+.students-profile-report .profiling-section h2 { break-after: avoid; font-size: 11pt; font-weight: 400; margin: 0 0 2.5mm; text-align: center; }
+.students-profile-report .profiling-table { border-collapse: collapse; font-size: 8.7pt; margin-top: 4mm; table-layout: fixed; width: 100%; }
+.students-profile-report .profiling-table caption { height: 0; overflow: hidden; position: absolute; width: 0; }
+.students-profile-report .profiling-table th, .students-profile-report .profiling-table td { border: .35pt solid #222; overflow-wrap: anywhere; padding: .9mm 1.25mm; vertical-align: middle; }
+.students-profile-report .profiling-table thead { display: table-header-group; }
+.students-profile-report .profiling-table tbody tr { break-inside: auto; page-break-inside: auto; }
+.students-profile-report .profiling-table tbody th { font-weight: 400; text-align: left; width: 31%; }
+.students-profile-report .profiling-table td { text-align: center; }
+.students-profile-report .profiling-table__total th, .students-profile-report .profiling-table__total td { font-weight: 700; }
+.students-profile-report .suppressed { color: #555; font-size: 7.5pt; font-style: italic; }
+.students-profile-report .empty-state { font-style: italic; }
+.students-profile-report .official-report-control { border-top: .35pt solid #555; break-inside: avoid; display: flex; flex-wrap: wrap; font-size: 7pt; gap: 1.5mm 6mm; justify-content: space-between; margin-top: 8mm; padding-top: 2mm; }

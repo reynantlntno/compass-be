@@ -1,0 +1,65 @@
+* { box-sizing: border-box; }
+
+body.students-profile-report {
+  color: #111;
+  /* Chromium ships Arial-compatible Liberation Sans; the stack keeps the
+     governed report readable where Arial itself is unavailable. */
+  font-family: Arial, "Liberation Sans", Helvetica, sans-serif;
+  font-size: 10pt;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.official-report-header {
+  break-inside: avoid;
+  margin-bottom: 11mm;
+  text-align: center;
+}
+
+.official-report-header p { margin: 0; }
+.official-report-header__republic { font-size: 8.5pt; }
+.official-report-header h1 { color: #741a1a; font-size: 15pt; letter-spacing: .3pt; margin: 1mm 0; text-transform: uppercase; }
+.official-report-header h2 { color: #741a1a; font-size: 12pt; margin: 2mm 0 0; text-transform: uppercase; }
+.official-report-header__rule { border-bottom: 3px double #741a1a; margin-top: 2mm; }
+
+.official-report-identification { break-inside: avoid; margin-bottom: 4mm; text-align: center; }
+.official-report-identification h1 { font-size: 16pt; margin: 0 0 3mm; text-transform: uppercase; }
+.official-report-identification dl { display: flex; flex-wrap: wrap; justify-content: center; margin: 0; }
+.official-report-identification dl div { border-left: 1px solid #777; margin: 1mm 0; padding: 0 3mm; }
+.official-report-identification dl div:first-child { border-left: 0; }
+.official-report-identification dt { font-size: 7.5pt; font-weight: bold; text-transform: uppercase; }
+.official-report-identification dd { margin: 0; }
+
+.official-report-confidentiality { border: 1px solid #741a1a; color: #741a1a; font-family: Arial, sans-serif; font-size: 7.5pt; font-weight: bold; margin: 0 0 5mm; padding: 1.5mm 2mm; text-align: center; text-transform: uppercase; }
+
+.profiling-cover-page { break-after: page; page-break-after: always; }
+.profiling-section { margin: 0 0 7mm; }
+.profiling-section h2 {
+  break-after: avoid-page;
+  font-size: 11pt;
+  font-weight: normal;
+  margin: 0 0 2.5mm;
+  page-break-after: avoid;
+  text-align: center;
+}
+
+.profiling-table { border-collapse: collapse; font-size: 8.7pt; margin-top: 4mm; table-layout: fixed; width: 100%; }
+.profiling-table caption { height: 0; overflow: hidden; position: absolute; width: 0; }
+.profiling-table thead { display: table-header-group; }
+.profiling-table__continuation-clearance { height: 4mm; }
+.profiling-table__continuation-clearance td { border: 0 !important; padding: 0 !important; }
+/* Chromium must be allowed to fragment naturally so every continuation keeps
+   its native repeated header; standard rows remain short in the governed
+   report and do not clip at page boundaries. */
+.profiling-table tbody tr { break-inside: auto; page-break-inside: auto; }
+.profiling-table th, .profiling-table td { border: .35pt solid #222; overflow-wrap: anywhere; padding: .9mm 1.25mm; vertical-align: middle; }
+.profiling-table thead th { font-size: 8.5pt; text-align: center; }
+.profiling-table tbody th { font-weight: normal; text-align: left; width: 31%; }
+.profiling-table td { text-align: center; }
+.profiling-table__total th, .profiling-table__total td { font-weight: bold; }
+.suppressed { color: #555; font-family: Arial, sans-serif; font-size: 7.5pt; font-style: italic; }
+.empty-state { font-style: italic; }
+
+.official-report-control { border-top: .35pt solid #555; break-inside: avoid; display: flex; flex-wrap: wrap; font-family: Arial, sans-serif; font-size: 7pt; gap: 1.5mm 6mm; justify-content: space-between; margin-top: 8mm; padding-top: 2mm; }
+.official-report-control--cover { margin: 0 0 4mm; }
+.official-report-control div { display: flex; flex-wrap: wrap; gap: 1.5mm 4mm; }

@@ -1,0 +1,24 @@
+https://localhost {
+    tls internal
+
+    log {
+        output discard
+    }
+
+    header {
+        X-Robots-Tag "noindex, nofollow, noarchive"
+    }
+
+    handle_path /static/* {
+        root * /static
+        file_server
+    }
+
+    handle {
+        reverse_proxy web:8000 {
+            header_up Host localhost
+            header_up X-Forwarded-Host localhost
+            header_up X-Forwarded-Proto https
+        }
+    }
+}

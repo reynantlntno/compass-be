@@ -1,0 +1,63 @@
+{% extends "emails/v1/base.txt" %}
+{% block content %}
+{% if template_key == "account_recovery" %}
+Someone requested a password reset for your COMPASS account.
+
+Open this address to reset your password:
+{{ action_url }}
+
+This link expires {{ expires_text }} and can be used once. If you did not request this, ignore this message.
+{% elif template_key == "two_step_code" %}
+Your COMPASS verification code is: {{ otp }}
+
+This code expires {{ expires_text }}. Do not share it.
+{% elif template_key == "student_activation" %}
+Your COMPASS student account is ready to activate.
+
+Open this address:
+{{ action_url }}
+
+This invitation expires {{ expires_text }} and is single use.
+{% elif template_key == "staff_activation" %}
+Your COMPASS staff account is ready to activate.
+
+Open this address:
+{{ action_url }}
+
+This invitation expires {{ expires_text }} and is single use.
+{% else %}
+A COMPASS notification is available in your account.
+{% if action %}
+Action: {{ action }}
+{% endif %}{% if status %}
+Status: {{ status }}
+{% endif %}{% if reference_code %}
+Reference: {{ reference_code }}
+{% endif %}
+{% if service_label %}
+Service: {{ service_label }}
+{% endif %}{% if collection_title %}
+Collection: {{ collection_title }}
+{% endif %}{% if counselor_name %}
+Counselor: {{ counselor_name }}
+{% endif %}
+{% if expires_on %}
+Available until: {{ expires_on }}
+{% endif %}
+{% if request_type %}
+Request: {{ request_type }}
+{% endif %}{% if reason_label %}
+Reason: {{ reason_label }}
+{% endif %}{% if student_name %}
+Student: {{ student_name }}
+{% endif %}{% if actor_name %}
+Actor: {{ actor_name }}
+{% endif %}{% if device_label %}
+Device: {{ device_label }}
+{% endif %}{% if office_name %}
+Office: {{ office_name }}
+{% endif %}{% if action_path %}
+Open this address: {{ action_path }}
+{% endif %}
+{% endif %}
+{% endblock %}

@@ -1,0 +1,11 @@
+{% extends "emails/v1/base.txt" %}
+{% block content %}
+COMPASS feedback invitation
+
+Action: {{ action }}
+Status: {{ status }}
+Service: {{ service_label }}
+Available until: {{ expires_on }}
+
+Open COMPASS to share your feedback.
+{% endblock %}

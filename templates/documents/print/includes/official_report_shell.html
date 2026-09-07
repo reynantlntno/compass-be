@@ -1,0 +1,21 @@
+<header class="official-report-header">
+    <p class="official-report-header__republic">Republic of the Philippines</p>
+    <h1>{{ institution.legal_name }}</h1>
+    {% if institution.address %}<p>{{ institution.address }}</p>{% endif %}
+    <div class="official-report-header__rule"></div>
+    <h2>{{ office.document_header_name|default:office.office_name }}</h2>
+</header>
+
+<section class="official-report-identification" aria-label="Report identification">
+    <h1>{{ report_context.report_title|default:"Students' Profile Report" }}</h1>
+    <dl>
+        <div><dt>Academic Year</dt><dd>{{ report_context.academic_year }}</dd></div>
+        <div><dt>College</dt><dd>{{ report_context.college }}</dd></div>
+        {% if report_context.year_level %}<div><dt>Cohort</dt><dd>{{ report_context.year_level }}</dd></div>{% endif %}
+        {% if report_context.campus %}<div><dt>Campus</dt><dd>{{ report_context.campus }}</dd></div>{% endif %}
+        {% if report_context.department %}<div><dt>Department</dt><dd>{{ report_context.department }}</dd></div>{% endif %}
+        {% if report_context.program %}<div><dt>Program</dt><dd>{{ report_context.program }}</dd></div>{% endif %}
+    </dl>
+</section>
+
+<p class="official-report-confidentiality">{{ confidentiality_notice|default:"CONFIDENTIAL - For authorized Guidance and Counseling Office use only." }}</p>

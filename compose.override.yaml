@@ -1,0 +1,117 @@
+# Project: COMPASS
+# File: compose.override.yaml
+# Purpose: Local development overrides — port mapping, volume mounts, command
+# Notes: Automatically loaded by "podman compose up" alongside compose.yaml.
+#   This file should NOT be used in staging/production.
+
+services:
+
+  db:
+    ports:
+      - "5432:5432"
+
+  web:
+    command: python manage.py runserver 0.0.0.0:8000
+    ports:
+      - "8000:8000"
+    environment:
+      MAINTENANCE_ENFORCEMENT_ENABLED: ${MAINTENANCE_ENFORCEMENT_ENABLED:-False}
+      DOCUMENT_PDF_RENDERER_ENABLED: ${DOCUMENT_PDF_RENDERER_ENABLED:-False}
+      DOCUMENT_PDF_RENDERER_TIMEOUT_MS: ${DOCUMENT_PDF_RENDERER_TIMEOUT_MS:-30000}
+      ACCOUNT_SECURITY_CAPTCHA_TIMEOUT_SECONDS: ${ACCOUNT_SECURITY_CAPTCHA_TIMEOUT_SECONDS:-5}
+      EMAIL_TIMEOUT: ${EMAIL_TIMEOUT:-10}
+      NOTIFICATION_WORKER_ENABLED: ${NOTIFICATION_WORKER_ENABLED:-False}
+      NOTIFICATION_WORKER_INTERVAL_SECONDS: ${NOTIFICATION_WORKER_INTERVAL_SECONDS:-5}
+      NOTIFICATION_WORKER_BATCH_SIZE: ${NOTIFICATION_WORKER_BATCH_SIZE:-20}
+      NOTIFICATION_WORKER_LOCK_TIMEOUT_SECONDS: ${NOTIFICATION_WORKER_LOCK_TIMEOUT_SECONDS:-300}
+      BACKUP_WORKER_POLL_INTERVAL_SECONDS: ${BACKUP_WORKER_POLL_INTERVAL_SECONDS:-15}
+      REPORT_SYNC_MAX_OUTPUT_BYTES: ${REPORT_SYNC_MAX_OUTPUT_BYTES:-262144}
+      REPORT_SYNC_MAX_WORK_UNITS: ${REPORT_SYNC_MAX_WORK_UNITS:-1000}
+      REPORT_ASYNC_AFTER_WORK_UNITS: ${REPORT_ASYNC_AFTER_WORK_UNITS:-3000}
+      REPORT_RUN_TIMEOUT_SECONDS: ${REPORT_RUN_TIMEOUT_SECONDS:-60}
+      REPORT_EXPORT_MAX_OUTPUT_BYTES: ${REPORT_EXPORT_MAX_OUTPUT_BYTES:-8388608}
+      PROTECTED_STORAGE_MAX_FILE_SIZE_BYTES: ${PROTECTED_STORAGE_MAX_FILE_SIZE_BYTES:-10485760}
+    volumes:
+      - .:/app
+      - ${PROTECTED_STORAGE_LOCAL_ROOT:-./protected_media}:/protected-media
+
+  backup-worker:
+    build:
+      context: .
+      dockerfile: Containerfile
+    env_file:
+      - .env
+    command:
+      - python
+      - manage.py
+      - process_backup_jobs
+      - --loop
+    environment:
+      BACKUP_WORKER_ENABLED: ${BACKUP_WORKER_ENABLED:-True}
+      BACKUP_WORKER_POLL_INTERVAL_SECONDS: ${BACKUP_WORKER_POLL_INTERVAL_SECONDS:-15}
+      BACKUP_LOCAL_DEMO_ROOT: /backup-work
+    volumes:
+      - .:/app
+      - ${PROTECTED_STORAGE_LOCAL_ROOT:-./protected_media}:/protected-media
+      - ${BACKUP_LOCAL_DEMO_ROOT:-./.local/backup-work}:/backup-work
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          case "$(tr '\000' ' ' </proc/1/cmdline)" in
+          *process_backup_jobs*--loop*) exit 0 ;;
+          *) exit 1 ;;
+          esac
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  notification-worker:
+    build:
+      context: .
+      dockerfile: Containerfile
+    env_file:
+      - .env
+    command:
+      - python
+      - manage.py
+      - process_notification_queue
+      - --loop
+    environment:
+      EMAIL_TIMEOUT: ${EMAIL_TIMEOUT:-10}
+      NOTIFICATION_WORKER_ENABLED: ${NOTIFICATION_WORKER_ENABLED:-False}
+      NOTIFICATION_WORKER_INTERVAL_SECONDS: ${NOTIFICATION_WORKER_INTERVAL_SECONDS:-5}
+      NOTIFICATION_WORKER_BATCH_SIZE: ${NOTIFICATION_WORKER_BATCH_SIZE:-20}
+      NOTIFICATION_WORKER_LOCK_TIMEOUT_SECONDS: ${NOTIFICATION_WORKER_LOCK_TIMEOUT_SECONDS:-300}
+    volumes:
+      - .:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          case "$(tr '\000' ' ' </proc/1/cmdline)" in
+          *process_notification_queue*--loop*) exit 0 ;;
+          *) exit 1 ;;
+          esac
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  ecounseling-recording-worker:
+    volumes:
+      - .:/app
+      - ${PROTECTED_STORAGE_LOCAL_ROOT:-./protected_media}:/protected-media

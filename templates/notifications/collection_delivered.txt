@@ -1,0 +1,10 @@
+{% extends "emails/v1/base.txt" %}
+{% block content %}
+COMPASS form collection available
+
+Action: {{ action }}
+Status: {{ status }}
+Collection: {{ collection_title }}
+
+Open COMPASS to view the available form.
+{% endblock %}

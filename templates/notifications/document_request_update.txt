@@ -1,0 +1,12 @@
+{% extends "emails/v1/base.txt" %}
+{% block content %}
+COMPASS document request update
+
+Your document request has a new status.
+
+Document Type: {{ request_type }}
+Status: {{ status }}
+{% if reference_code %}Reference: {{ reference_code }}{% endif %}
+
+Sign in to COMPASS to review the current status.
+{% endblock %}

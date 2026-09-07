@@ -1,0 +1,41 @@
+{% extends "documents/print/base_governed_document.html" %}
+
+{% block document_title %}Good Moral Character — Graduate{% endblock %}
+
+{% block document_content %}
+<section class="good-moral-content">
+    <p>
+        This is to certify that <strong>{{ applicant_display_name }}</strong>
+        graduated with the degree of <strong>{{ applicant_program_degree }}</strong>
+        {% if applicant_major %}major in <strong>{{ applicant_major }}</strong>{% endif %}
+        {% if applicant_graduation_date %}on <strong>{{ applicant_graduation_date }}</strong>{% endif %}.
+    </p>
+    <p>During his/her stay in this College he/she had shown good moral character and never been subjected to any disciplinary action.</p>
+    <p>
+        Issued upon request of the party concerned this <strong>{{ issue_day }}</strong>
+        day of <strong>{{ issue_month }}</strong>, <strong>{{ issue_year }}</strong>
+        {% if issue_purpose %}for {{ issue_purpose }}{% endif %}.
+    </p>
+</section>
+
+<section class="governed-field-group">
+    <table class="governed-table governed-table--compact">
+        <thead><tr><th scope="col">Receipt field</th><th scope="col">Value</th></tr></thead>
+        <tbody>
+            {% if official_receipt_number %}<tr><th>Official Receipt No.</th><td>{{ official_receipt_number }}</td></tr>{% endif %}
+            {% if official_receipt_date %}<tr><th>Date</th><td>{{ official_receipt_date }}</td></tr>{% endif %}
+            {% if official_receipt_amount %}<tr><th>Amount</th><td>{{ official_receipt_amount }}</td></tr>{% endif %}
+        </tbody>
+    </table>
+</section>
+
+<div class="governed-signatures">
+    {% if approval_signatory_name or approval_signatory_title %}
+    <div class="governed-signature">
+        <div class="governed-signature__line"></div>
+        {% if approval_signatory_name %}<div class="governed-signature__name">{{ approval_signatory_name }}</div>{% endif %}
+        {% if approval_signatory_title %}<div class="governed-signature__title">{{ approval_signatory_title }}</div>{% endif %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

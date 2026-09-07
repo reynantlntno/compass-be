@@ -1,0 +1,2 @@
+# Container entrypoints must keep a POSIX shebang when checked out on Windows.
+*.sh text eol=lf

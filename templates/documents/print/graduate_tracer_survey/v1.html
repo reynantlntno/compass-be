@@ -1,0 +1,7 @@
+{% extends "documents/print/base_governed_document.html" %}
+{% block document_title %}Graduate Tracer Survey{% endblock %}
+{% block document_content %}
+<div class="governed-confidential">Graduate Tracer Survey - controlled alumni response form.</div>
+{% for section in sections %}<section class="governed-field-group"><h2>{{ section.title }}</h2><table class="governed-table"><thead><tr><th scope="col">Item</th><th scope="col">Response</th></tr></thead><tbody>{% for field in section.fields %}<tr><th scope="row">{{ field.label }}</th><td>{% if field.checkbox %}<span class="governed-table__checkbox">{% if field.checked %}[x]{% else %}[ ]{% endif %}</span> {% endif %}{{ field.value|default:"-" }}</td></tr>{% endfor %}</tbody></table></section>{% empty %}<p class="governed-muted">No authorized tracer data is available.</p>{% endfor %}
+<section class="governed-signature-grid"><div>Respondent: ____________________</div><div>Processed by: ____________________</div></section>
+{% endblock %}

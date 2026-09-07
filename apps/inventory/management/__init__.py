@@ -1,0 +1,1 @@
+"""Inventory management command package."""

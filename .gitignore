@@ -1,0 +1,83 @@
+# COMPASS — .gitignore
+# This file must be the first commit in the repository.
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# ---- Virtual environments ----
+.venv/
+venv/
+env/
+ENV/
+
+# ---- Django ----
+db.sqlite3
+db.sqlite3-journal
+*.log
+media/
+protected_media/
+private_media/
+staticfiles/
+static_collected/
+
+# ---- Environment / Secrets ----
+.env
+.env.local
+.env.production
+.env.staging
+/deploy/staging.env
+/deploy/local-staging.env
+/.local/staging-evidence/
+
+# ---- Documentation PDFs (not canonical; markdown is source of truth) ----
+docs/pdfs/
+
+# ---- IDE / Editor ----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ---- Coverage / Testing ----
+htmlcov/
+.coverage
+.coverage.*
+.pytest_cache/
+.tox/
+nosetests.xml
+coverage.xml
+
+# ---- Podman / Docker ----
+# Do not ignore compose files — they are tracked.
+# Do not ignore Containerfile — it is tracked.
+# The Jitsi wrapper downloads a pinned upstream release and generates secrets
+# and runtime configuration here. None of that local state belongs in Git.
+/.local/jitsi/
+
+# ---- MinIO / Storage data ----
+minio_data/
+storage_data/
+
+# ---- Backups ----
+/backups/
+*.sql.gz
+*.dump
+
+# ---- Local Go proxy (agentrouter forwarder) ----
+/proxy/
+
+# ---- Misc ----
+*.bak
+*.tmp
+output/

@@ -1,0 +1,13 @@
+{% extends "emails/v1/base.txt" %}
+{% block content %}
+COMPASS Individual Inventory update requested
+
+The Guidance Office reopened your Individual Inventory for correction.
+Please sign in to COMPASS, review the requested sections, and submit the
+updated Inventory to lock it again.
+
+Open the Individual Inventory: {{ action_path }}
+
+This message does not include your Inventory answers. Please use COMPASS for
+the secure correction flow.
+{% endblock %}

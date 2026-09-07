@@ -1,0 +1,7 @@
+{% extends "documents/print/base_governed_document.html" %}
+{% block document_title %}Referral Slip{% endblock %}
+{% block document_content %}
+<div class="governed-confidential">Operational referral form - confidential details are shown only under the existing purpose policy.</div>
+{% for section in sections %}<section class="governed-field-group"><h2>{{ section.title }}</h2><table class="governed-table"><tbody>{% for field in section.fields %}<tr><th scope="row">{{ field.label }}</th><td>{{ field.value|default:"-" }}</td></tr>{% endfor %}</tbody></table></section>{% empty %}<p class="governed-muted">No authorized referral data is available.</p>{% endfor %}
+<section class="governed-signature-grid"><div>Referred by: ____________________</div><div>Received by: ____________________</div></section>
+{% endblock %}

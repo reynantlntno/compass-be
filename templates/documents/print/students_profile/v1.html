@@ -1,0 +1,35 @@
+{% extends "documents/print/base_governed_document.html" %}
+
+{% block document_title %}Students’ Profile Report{% endblock %}
+{% block body_class %}governed-document students-profile-report{% endblock %}
+
+{% block document_content %}
+<section class="profiling-cover-page">
+    <div class="official-report-identification">
+        <h1>{{ report_context.report_title }}</h1>
+        <dl>
+            {% for key, value in report_context.items %}
+                {% if key != "report_title" %}<div><dt>{{ key|cut:"_"|title }}</dt><dd>{{ value }}</dd></div>{% endif %}
+            {% endfor %}
+        </dl>
+    </div>
+    {% if confidentiality_notice %}<div class="governed-confidential">{{ confidentiality_notice }}</div>{% endif %}
+    <footer class="official-report-control official-report-control--cover">
+        <div>
+            {% if form_revision.official_form_code %}<span>Form code: {{ form_revision.official_form_code }}</span>{% endif %}
+            {% if form_revision.official_revision %}<span>Revision: {{ form_revision.official_revision }}</span>{% endif %}
+            {% if form_revision.effective_from %}<span>Effective: {{ form_revision.effective_from }}</span>{% endif %}
+        </div>
+        <div>
+            {% if generated_at %}<span>Generated: {{ generated_at|date:"F j, Y, g:i a" }}</span>{% endif %}
+            {% if prepared_by %}<span>Prepared by: {{ prepared_by }}</span>{% endif %}
+            {% if approved_by %}<span>Approved by: {{ approved_by }}</span>{% endif %}
+        </div>
+    </footer>
+</section>
+{% for section in sections %}
+    {% include "documents/print/includes/profiling_table_block.html" with section=section section_index=forloop.counter %}
+{% empty %}
+    <p class="empty-state">No reportable aggregate data is available for this reporting context.</p>
+{% endfor %}
+{% endblock %}

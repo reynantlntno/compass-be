@@ -1,0 +1,29 @@
+<section class="profiling-section" aria-labelledby="profiling-section-{{ section_index }}">
+    <h2 id="profiling-section-{{ section_index }}">{{ section.title }}</h2>
+    <table class="profiling-table">
+        <caption>{{ section.title }}</caption>
+        <thead>
+            <tr class="profiling-table__continuation-clearance" aria-hidden="true">
+                <td colspan="{{ section.columns|length|add:1 }}"></td>
+            </tr>
+            <tr>
+                <th scope="col">{{ section.row_heading|default:"Category" }}</th>
+                {% for column in section.columns %}
+                <th scope="col">{{ column.label }}</th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in section.rows %}
+            <tr{% if row.is_total %} class="profiling-table__total"{% endif %}>
+                <th scope="row">{{ row.label }}</th>
+                {% for value in row.values %}
+                <td>{% if value == "Suppressed for privacy" %}<span class="suppressed">Suppressed for privacy</span>{% else %}{{ value|default:"-" }}{% endif %}</td>
+                {% endfor %}
+            </tr>
+            {% empty %}
+            <tr><td colspan="{{ section.columns|length|add:1 }}">No reportable aggregate data.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>

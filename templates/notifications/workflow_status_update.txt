@@ -1,0 +1,14 @@
+{% extends "emails/v1/base.txt" %}
+{% block content %}
+COMPASS request update
+
+A request in COMPASS has a new update.
+
+Update: {{ action }}
+Status: {{ status }}
+{% if actor_name %}Updated by: {{ actor_name }}
+{% endif %}
+{% if reference_code %}Reference: {{ reference_code }}{% endif %}
+
+Sign in to COMPASS to review the current status.
+{% endblock %}

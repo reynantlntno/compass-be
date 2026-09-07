@@ -1,0 +1,10 @@
+{% extends "emails/v1/base.txt" %}
+{% block content %}
+COMPASS Graduate Tracer update
+
+Action: {{ action }}
+Status: {{ status }}
+{% if reference_code %}Reference: {{ reference_code }}
+{% endif %}
+Open COMPASS to view or continue the Graduate Tracer Survey.
+{% endblock %}

@@ -1,0 +1,10 @@
+{% extends "emails/v1/base.txt" %}
+{% block content %}
+COMPASS account security event
+
+Action: {{ action }}
+Status: {{ status }}
+{% if device_label %}Device: {{ device_label }}
+{% endif %}
+If this was unexpected, sign in to COMPASS and review your account security settings.
+{% endblock %}

@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+{% load static %}
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="robots" content="noindex, nofollow, noarchive">
+    <title>{% block document_title %}COMPASS document preview{% endblock %}</title>
+    <link rel="stylesheet" href="{% static 'documents/css/governed_print.css' %}">
+    {% block document_head %}{% endblock %}
+</head>
+<body class="{% block body_class %}governed-document{% endblock %}">
+<div class="governed-document-shell">
+    <header class="governed-header">
+        <div class="governed-header__grid">
+            <div class="governed-header__primary">
+                {% if print_brand.primary.data_uri %}
+                    <img class="governed-header__logo" src="{{ print_brand.primary.data_uri }}" alt="{{ print_brand.primary.alt_text }}">
+                {% elif print_brand.logo_data_uri %}
+                    <img class="governed-header__logo" src="{{ print_brand.logo_data_uri }}" alt="{{ print_brand.logo_alt }}">
+                {% endif %}
+            </div>
+            <div class="governed-header__identity">
+                <div class="governed-header__republic">Republic of the Philippines</div>
+                <div class="governed-header__institution">{{ institution.legal_name }}</div>
+                {% if institution.former_name %}<div class="governed-header__former">(formerly {{ institution.former_name }})</div>{% endif %}
+                {% if institution.address %}<div class="governed-header__address">{{ institution.address }}</div>{% endif %}
+                <div class="governed-header__office">{{ office.document_header_name|default:office.office_name }}</div>
+            </div>
+            <div class="governed-header__secondary">
+                {% for asset in print_brand.secondary %}
+                    {% if asset.data_uri %}<img class="governed-header__secondary-logo" src="{{ asset.data_uri }}" alt="{{ asset.alt_text }}">{% endif %}
+                {% endfor %}
+            </div>
+        </div>
+        {% if print_brand.contact_rows %}
+            <div class="governed-header__contacts" aria-label="Institutional contact information">
+                {% for row in print_brand.contact_rows %}
+                    <span class="governed-header__contact"><span class="governed-header__contact-label">{{ row.label }}</span> {{ row.value }}</span>
+                {% endfor %}
+            </div>
+        {% endif %}
+        <div class="governed-header__rule"></div>
+    </header>
+
+    {% if document_control %}
+      {% if not document_control.shell_key or print_brand.show_control_metadata %}
+        <section class="governed-control" aria-label="Document control metadata">
+            <div class="governed-control__title">{{ document_control.display_name }}</div>
+            <div class="governed-control__metadata">
+                {% if document_control.form_code %}<span>Source form: {{ document_control.form_code }}</span>{% endif %}
+                {% if document_control.form_revision %}<span>Source revision: {{ document_control.form_revision }}</span>{% endif %}
+                {% if document_control.effective_from %}<span>Effective: {{ document_control.effective_from }}</span>{% endif %}
+                {% if document_control.template_version %}<span>Template: {{ document_control.template_version }}</span>{% endif %}
+            </div>
+            {% if document_control.label != "OFFICIAL" %}
+                <div class="governed-preview-banner">{{ document_control.label }}</div>
+            {% endif %}
+            {% if document_control.page_2_metadata_note %}
+                <div class="governed-control__note">{{ document_control.page_2_metadata_note }}</div>
+            {% endif %}
+        </section>
+      {% endif %}
+    {% elif form_code or form_revision %}
+        {# Direct template-context tests/legacy HTML callers still expose the
+           source form fields; governed services always replace this with the
+           server-owned document_control block above. #}
+        <section class="governed-control" aria-label="Source form metadata">
+            <div class="governed-control__metadata">
+                {% if form_code %}<span>Source form: {{ form_code }}</span>{% endif %}
+                {% if form_revision %}<span>Source revision: {{ form_revision }}</span>{% endif %}
+            </div>
+        </section>
+    {% endif %}
+
+    <main class="governed-content">
+        {% block document_content %}{% endblock %}
+    </main>
+
+    {% if print_brand.show_footer_marks %}
+        <footer class="governed-footer" aria-label="Institutional recognition and control marks">
+            <div class="governed-footer__row">
+                {% for asset in print_brand.footer.identity %}
+                    {% if asset.data_uri %}<img src="{{ asset.data_uri }}" alt="{{ asset.alt_text }}">{% endif %}
+                {% endfor %}
+                {% for asset in print_brand.footer.campaign %}
+                    {% if asset.data_uri %}<img src="{{ asset.data_uri }}" alt="{{ asset.alt_text }}">{% endif %}
+                {% endfor %}
+                {% for asset in print_brand.footer.certifications %}
+                    {% if asset.data_uri %}<img src="{{ asset.data_uri }}" alt="{{ asset.alt_text }}">{% endif %}
+                {% endfor %}
+                {% for asset in print_brand.footer.recognitions %}
+                    {% if asset.data_uri %}<img src="{{ asset.data_uri }}" alt="{{ asset.alt_text }}">{% endif %}
+                {% endfor %}
+                {% for asset in print_brand.footer.privacy_credentials %}
+                    {% if asset.data_uri %}<img src="{{ asset.data_uri }}" alt="{{ asset.alt_text }}">{% endif %}
+                {% endfor %}
+            </div>
+        </footer>
+    {% endif %}
+
+    {% block document_footer %}{% endblock %}
+</div>
+</body>
+</html>

@@ -1,0 +1,6 @@
+{{ configured_institution_name }} · {{ configured_office_name }}
+
+{% block content %}{% endblock %}
+
+For help, contact {{ support_email }}{% if support_phone %} or {{ support_phone }}{% endif %}.
+This message contains only the information needed for this action. Do not forward security links or codes.

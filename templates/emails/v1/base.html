@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+  <body style="margin:0;background:#f5f7fa;color:#17202a;font-family:Arial,Helvetica,sans-serif;line-height:1.5;">
+    <div style="max-width:640px;margin:0 auto;padding:24px 16px;">
+      <div style="background:#ffffff;border:1px solid #d9e1ea;border-radius:8px;padding:28px;">
+        <p style="margin:0 0 18px;font-size:14px;color:#465568;">{{ configured_institution_name }} · {{ configured_office_name }}</p>
+        {% block content %}{% endblock %}
+        <hr style="border:0;border-top:1px solid #d9e1ea;margin:28px 0 18px;">
+        <p style="font-size:13px;color:#465568;margin:0;">For help, contact {{ support_email }}{% if support_phone %} or {{ support_phone }}{% endif %}.</p>
+        <p style="font-size:12px;color:#5a6775;margin:10px 0 0;">For your security, please do not forward this email or share any links inside it.</p>
+      </div>
+    </div>
+  </body>
+</html>

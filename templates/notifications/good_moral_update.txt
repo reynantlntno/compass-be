@@ -1,0 +1,11 @@
+{% extends "emails/v1/base.txt" %}
+{% block content %}
+COMPASS Good Moral request update
+
+Action: {{ action }}
+Status: {{ status }}
+{% if reference_code %}Reference: {{ reference_code }}
+{% endif %}{% if reason_label %}Reason: {{ reason_label }}
+{% endif %}
+Open COMPASS to view the current request information.
+{% endblock %}

@@ -1,0 +1,11 @@
+{% extends "emails/v1/base.txt" %}
+{% block content %}
+COMPASS call slip update
+
+Action: {{ action }}
+Status: {{ status }}
+{% if reference_code %}Reference: {{ reference_code }}
+{% endif %}{% if office_name %}Office: {{ office_name }}
+{% endif %}
+Open COMPASS to view the current call slip information.
+{% endblock %}

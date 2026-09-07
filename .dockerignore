@@ -1,0 +1,47 @@
+# Version-control metadata and local development environments.
+.git/
+.venv/
+venv/
+env/
+**/node_modules/
+
+# Local-only runtime data, generated artifacts, and credentials.
+.local/
+backups/
+media/
+protected_media/
+private_media/
+output/
+tmp/
+staticfiles/
+static_collected/
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+*.sql
+*.log
+*.tar
+*.tar.gz
+*.oci
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.csr
+*.tfstate
+*.tfstate.*
+.env*
+.DS_Store
+
+# Deployment, documentation, and test material is transferred separately.
+# The image only needs the secret-environment runtime wrapper from deploy/.
+docs/
+infra/
+scripts/
+tests/
+**/tests/
+compose*.yaml
+deploy/*
+!deploy/compass-secret-env.sh

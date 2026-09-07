@@ -1,0 +1,6 @@
+{% extends "documents/print/base_governed_document.html" %}
+{% block document_title %}Customer Feedback / CSM{% endblock %}
+{% block document_content %}
+<div class="governed-confidential">Authorized preview — Customer Feedback remains pending official confirmation.</div>
+{% for section in sections %}<section class="governed-field-group"><h2>{{ section.title }}</h2><table class="governed-table"><thead><tr><th scope="col">Field</th><th scope="col">Value</th></tr></thead><tbody>{% for field in section.fields %}<tr><th scope="row">{{ field.label }}</th><td>{% if field.checkbox %}<span class="governed-table__checkbox">{% if field.checked %}☑{% else %}☐{% endif %}</span>{% endif %}{{ field.value }}</td></tr>{% endfor %}</tbody></table></section>{% empty %}<p class="governed-muted">No authorized feedback data is available.</p>{% endfor %}
+{% endblock %}
