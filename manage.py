@@ -3,7 +3,8 @@
 # Project: COMPASS
 # File: manage.py
 # Purpose: Django management entry point
-# Notes: Use scripts/manage.sh for container-aware execution.
+# Notes: Use scripts/unix/manage.sh or scripts/windows/manage.ps1 for
+# container-aware execution.
 
 import os
 import sys

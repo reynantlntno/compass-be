@@ -4,6 +4,8 @@
 # Base: Python 3.12 slim (Debian bookworm)
 # Notes: Podman-compatible. Use "podman compose build" to build.
 
+# Do not pin a platform here. Podman/Compose resolves this multi-arch base
+# image for the target host (arm64 on Apple Silicon, amd64 on x86 hosts).
 FROM python:3.12-slim-bookworm
 
 # Prevent Python from writing .pyc files and enable unbuffered output

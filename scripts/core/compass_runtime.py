@@ -15,13 +15,13 @@ import shutil
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Sequence
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_HEALTH_URL = "http://localhost:8000/health/"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
 def compose_command() -> list[str]:
@@ -30,7 +30,12 @@ def compose_command() -> list[str]:
     configured = os.environ.get("COMPASS_COMPOSE_COMMAND", "").strip()
     if configured:
         return shlex.split(configured)
+    if shutil.which("podman-compose"):
+        return ["podman-compose"]
     if shutil.which("podman"):
+        # Keep Podman on its native compose provider when Docker Compose is
+        # also installed on the host.
+        os.environ.setdefault("PODMAN_COMPOSE_PROVIDER", "podman-compose")
         return ["podman", "compose"]
     if shutil.which("docker"):
         return ["docker", "compose"]
@@ -139,13 +144,36 @@ def check_health_endpoint(url: str) -> bool:
         return False
 
 
+def resolve_health_url() -> str:
+    """Resolve an operator-provided health URL without a localhost fallback."""
+
+    health_url = os.environ.get("COMPASS_HEALTHCHECK_URL", "").strip()
+    if not health_url:
+        api_base_url = os.environ.get("COMPASS_API_BASE_URL", "").strip().rstrip("/")
+        if api_base_url:
+            health_url = f"{api_base_url}/health/"
+
+    if not health_url:
+        raise RuntimeError(
+            "Set COMPASS_HEALTHCHECK_URL or COMPASS_API_BASE_URL before running readiness checks."
+        )
+
+    parsed = urllib.parse.urlparse(health_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError(
+            "COMPASS_HEALTHCHECK_URL must be an absolute http:// or https:// URL."
+        )
+    return health_url
+
+
 def run_readiness() -> int:
     """Run the documented read-only deployment readiness sequence."""
 
-    configured_api_url = os.environ.get("COMPASS_API_BASE_URL", "").strip().rstrip("/")
-    health_url = os.environ.get("COMPASS_HEALTHCHECK_URL", "").strip()
-    if not health_url:
-        health_url = f"{configured_api_url}/health/" if configured_api_url else DEFAULT_HEALTH_URL
+    try:
+        health_url = resolve_health_url()
+    except RuntimeError as exc:
+        print(f"COMPASS_RUNTIME_ERROR={exc}", file=sys.stderr)
+        return 1
     system_identity = os.environ.get("COMPASS_READINESS_SYSTEM_IDENTITY", "").strip()
     probe_external = parse_enabled(os.environ.get("COMPASS_READINESS_PROBE_EXTERNAL"))
     health_args = ["verify_health", "--strict", "--format", "json"]

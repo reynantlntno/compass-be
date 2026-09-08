@@ -10,11 +10,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $envPath = Join-Path $repoRoot "deploy\local-staging.env"
 $envExamplePath = Join-Path $repoRoot "deploy\local-staging.env.example"
 $composeFiles = @("-f", (Join-Path $repoRoot "compose.local-staging.yaml"))
-$projectArgs = @("compose", "--project-name", "compass-local-staging", "--env-file", $envPath) + $composeFiles
 
 function New-RandomToken([int]$Bytes = 32) {
     $buffer = New-Object byte[] $Bytes
@@ -110,7 +109,34 @@ function Set-EnvEntry([string]$Name, [string]$Value) {
 }
 
 function Invoke-Compose([string[]]$Arguments) {
-    & podman @projectArgs @Arguments
+    $composeArguments = @(
+        "--project-name",
+        "compass-local-staging",
+        "--env-file",
+        $envPath
+    ) + $composeFiles + $Arguments
+    $nativeCompose = Get-Command podman-compose -ErrorAction SilentlyContinue
+    if ($null -ne $nativeCompose) {
+        & $nativeCompose.Source @composeArguments
+    }
+    else {
+        # The Podman compose shim may prefer Docker Compose, which does not
+        # support this stack's external Podman secrets. Select native
+        # podman-compose when the standalone command is not on PATH.
+        $previousProvider = $env:PODMAN_COMPOSE_PROVIDER
+        $env:PODMAN_COMPOSE_PROVIDER = "podman-compose"
+        try {
+            & podman compose @composeArguments
+        }
+        finally {
+            if ($null -eq $previousProvider) {
+                Remove-Item Env:PODMAN_COMPOSE_PROVIDER -ErrorAction SilentlyContinue
+            }
+            else {
+                $env:PODMAN_COMPOSE_PROVIDER = $previousProvider
+            }
+        }
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "Local staging Compose operation failed."
     }

@@ -4,7 +4,8 @@ param(
     [string[]]$ReadinessArgs
 )
 
-$scriptPath = Join-Path $PSScriptRoot "compass_runtime.py"
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$scriptPath = Join-Path $repoRoot "scripts\core\compass_runtime.py"
 $python = Get-Command python -ErrorAction SilentlyContinue
 if ($null -ne $python) {
     & $python.Source $scriptPath readiness @ReadinessArgs

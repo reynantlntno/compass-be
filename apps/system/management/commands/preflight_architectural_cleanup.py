@@ -25,7 +25,7 @@ _RETIRED_COMMANDS = frozenset(
 _ENV_CONTRACT_FILES = (
     ".env.example",
     "deploy/local-staging.env.example",
-    "deploy/staging.env.example",
+    "deploy/oci/staging.env.example",
     "compose.yaml",
     "compose.override.yaml",
     "compose.local-staging.yaml",

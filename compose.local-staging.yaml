@@ -72,7 +72,7 @@ x-app-environment: &app-environment
   DOCUMENT_PDF_RENDERER_TIMEOUT_MS: ${DOCUMENT_PDF_RENDERER_TIMEOUT_MS:-30000}
   ACCOUNT_SECURITY_CAPTCHA_TIMEOUT_SECONDS: ${ACCOUNT_SECURITY_CAPTCHA_TIMEOUT_SECONDS:-5}
   EMAIL_TIMEOUT: ${EMAIL_TIMEOUT:-10}
-  NOTIFICATION_WORKER_ENABLED: ${NOTIFICATION_WORKER_ENABLED:-False}
+  NOTIFICATION_WORKER_ENABLED: ${NOTIFICATION_WORKER_ENABLED:-True}
   NOTIFICATION_WORKER_INTERVAL_SECONDS: ${NOTIFICATION_WORKER_INTERVAL_SECONDS:-5}
   NOTIFICATION_WORKER_BATCH_SIZE: ${NOTIFICATION_WORKER_BATCH_SIZE:-20}
   NOTIFICATION_WORKER_LOCK_TIMEOUT_SECONDS: ${NOTIFICATION_WORKER_LOCK_TIMEOUT_SECONDS:-300}
@@ -112,6 +112,11 @@ x-app-service: &app-service
   build:
     context: .
     dockerfile: Containerfile
+    # Leave the target platform to Podman/Compose so the same local staging
+    # file follows the host architecture (arm64 on Apple Silicon, amd64 on
+    # Intel/x86 hosts). Pull the base image so a cached image for the wrong
+    # architecture cannot silently be reused.
+    pull: true
   image: ${COMPASS_IMAGE_REF:-localhost/compass:local-staging}
   entrypoint: ["/usr/local/bin/compass-secret-env"]
   environment: *app-environment

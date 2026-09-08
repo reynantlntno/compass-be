@@ -156,7 +156,7 @@ class PolicyRegistryTests(TestCase):
         deployment_files = (
             ".env.example",
             "deploy/local-staging.env.example",
-            "deploy/staging.env.example",
+            "deploy/oci/staging.env.example",
             "compose.yaml",
             "compose.override.yaml",
             "compose.local-staging.yaml",

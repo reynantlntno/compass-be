@@ -38,6 +38,10 @@ services:
     build:
       context: .
       dockerfile: Containerfile
+      # Keep the build architecture selected by the host/runtime. Pulling the
+      # base image prevents a cached image for another architecture from being
+      # reused by Podman Compose.
+      pull: true
     environment:
       DJANGO_SETTINGS_MODULE: ${DJANGO_SETTINGS_MODULE:-config.settings.development}
       COMPASS_ENVIRONMENT: ${COMPASS_ENVIRONMENT:-development}
@@ -52,7 +56,9 @@ services:
       DOCUMENT_PDF_RENDERER_TIMEOUT_MS: ${DOCUMENT_PDF_RENDERER_TIMEOUT_MS:-30000}
       ACCOUNT_SECURITY_CAPTCHA_TIMEOUT_SECONDS: ${ACCOUNT_SECURITY_CAPTCHA_TIMEOUT_SECONDS:-5}
       EMAIL_TIMEOUT: ${EMAIL_TIMEOUT:-10}
-      NOTIFICATION_WORKER_ENABLED: ${NOTIFICATION_WORKER_ENABLED:-False}
+      # The base file has no notification-worker service. The local
+      # development override enables this declaration alongside that service.
+      NOTIFICATION_WORKER_ENABLED: "False"
       NOTIFICATION_WORKER_INTERVAL_SECONDS: ${NOTIFICATION_WORKER_INTERVAL_SECONDS:-5}
       NOTIFICATION_WORKER_BATCH_SIZE: ${NOTIFICATION_WORKER_BATCH_SIZE:-20}
       NOTIFICATION_WORKER_LOCK_TIMEOUT_SECONDS: ${NOTIFICATION_WORKER_LOCK_TIMEOUT_SECONDS:-300}
@@ -108,6 +114,7 @@ services:
     build:
       context: .
       dockerfile: Containerfile
+      pull: true
     command:
       - python
       - manage.py

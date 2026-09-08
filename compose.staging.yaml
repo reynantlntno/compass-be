@@ -38,7 +38,7 @@ services:
     restart: unless-stopped
 
   web:
-    image: ${COMPASS_IMAGE_REF:-localhost/compass:staging-amd64}
+    image: ${COMPASS_IMAGE_REF:?COMPASS_IMAGE_REF is required; provide an image built for the target host architecture}
     entrypoint: ["/usr/local/bin/compass-secret-env"]
     command:
       - /bin/sh
@@ -68,7 +68,7 @@ services:
       DOCUMENT_PDF_RENDERER_TIMEOUT_MS: ${DOCUMENT_PDF_RENDERER_TIMEOUT_MS:-30000}
       ACCOUNT_SECURITY_CAPTCHA_TIMEOUT_SECONDS: ${ACCOUNT_SECURITY_CAPTCHA_TIMEOUT_SECONDS:-5}
       EMAIL_TIMEOUT: ${EMAIL_TIMEOUT:-10}
-      NOTIFICATION_WORKER_ENABLED: ${NOTIFICATION_WORKER_ENABLED:-False}
+      NOTIFICATION_WORKER_ENABLED: ${NOTIFICATION_WORKER_ENABLED:-True}
       NOTIFICATION_WORKER_INTERVAL_SECONDS: ${NOTIFICATION_WORKER_INTERVAL_SECONDS:-5}
       NOTIFICATION_WORKER_BATCH_SIZE: ${NOTIFICATION_WORKER_BATCH_SIZE:-20}
       NOTIFICATION_WORKER_LOCK_TIMEOUT_SECONDS: ${NOTIFICATION_WORKER_LOCK_TIMEOUT_SECONDS:-300}
@@ -141,6 +141,8 @@ services:
       BACKUP_STORAGE_S3_REGION_NAME: ${BACKUP_STORAGE_S3_REGION_NAME:-ap-singapore-1}
       BACKUP_STORAGE_S3_ADDRESSING_STYLE: path
       BACKUP_RESTORE_EXECUTION_MODE: dry_run_only
+      # The web process does not execute backup jobs. The dedicated
+      # backup-worker service below owns that process.
       BACKUP_WORKER_ENABLED: "False"
     volumes:
       - compass_static:/app/staticfiles
@@ -177,7 +179,7 @@ services:
     restart: unless-stopped
 
   backup-worker:
-    image: ${COMPASS_IMAGE_REF:-localhost/compass:staging-amd64}
+    image: ${COMPASS_IMAGE_REF:?COMPASS_IMAGE_REF is required; provide an image built for the target host architecture}
     entrypoint: ["/usr/local/bin/compass-secret-env"]
     command:
       - python
@@ -194,7 +196,7 @@ services:
       DOCUMENT_PDF_RENDERER_TIMEOUT_MS: ${DOCUMENT_PDF_RENDERER_TIMEOUT_MS:-30000}
       ACCOUNT_SECURITY_CAPTCHA_TIMEOUT_SECONDS: ${ACCOUNT_SECURITY_CAPTCHA_TIMEOUT_SECONDS:-5}
       EMAIL_TIMEOUT: ${EMAIL_TIMEOUT:-10}
-      NOTIFICATION_WORKER_ENABLED: ${NOTIFICATION_WORKER_ENABLED:-False}
+      NOTIFICATION_WORKER_ENABLED: ${NOTIFICATION_WORKER_ENABLED:-True}
       NOTIFICATION_WORKER_INTERVAL_SECONDS: ${NOTIFICATION_WORKER_INTERVAL_SECONDS:-5}
       NOTIFICATION_WORKER_BATCH_SIZE: ${NOTIFICATION_WORKER_BATCH_SIZE:-20}
       NOTIFICATION_WORKER_LOCK_TIMEOUT_SECONDS: ${NOTIFICATION_WORKER_LOCK_TIMEOUT_SECONDS:-300}
@@ -258,6 +260,7 @@ services:
       BACKUP_STORAGE_S3_ADDRESSING_STYLE: path
       BACKUP_LOCAL_DEMO_ROOT: /var/lib/compass-backup-work
       BACKUP_RESTORE_EXECUTION_MODE: dry_run_only
+      # Backup processing is enabled only in this dedicated worker service.
       BACKUP_WORKER_ENABLED: "True"
     volumes:
       - ${COMPASS_DATA_ROOT:-/srv/compass/data}/backup-work:/var/lib/compass-backup-work:Z
@@ -300,7 +303,7 @@ services:
     restart: unless-stopped
 
   notification-worker:
-    image: ${COMPASS_IMAGE_REF:-localhost/compass:staging-amd64}
+    image: ${COMPASS_IMAGE_REF:?COMPASS_IMAGE_REF is required; provide an image built for the target host architecture}
     entrypoint: ["/usr/local/bin/compass-secret-env"]
     command:
       - /bin/sh
@@ -317,7 +320,7 @@ services:
       DOCUMENT_PDF_RENDERER_TIMEOUT_MS: ${DOCUMENT_PDF_RENDERER_TIMEOUT_MS:-30000}
       ACCOUNT_SECURITY_CAPTCHA_TIMEOUT_SECONDS: ${ACCOUNT_SECURITY_CAPTCHA_TIMEOUT_SECONDS:-5}
       EMAIL_TIMEOUT: ${EMAIL_TIMEOUT:-10}
-      NOTIFICATION_WORKER_ENABLED: ${NOTIFICATION_WORKER_ENABLED:-False}
+      NOTIFICATION_WORKER_ENABLED: ${NOTIFICATION_WORKER_ENABLED:-True}
       NOTIFICATION_WORKER_INTERVAL_SECONDS: ${NOTIFICATION_WORKER_INTERVAL_SECONDS:-5}
       NOTIFICATION_WORKER_BATCH_SIZE: ${NOTIFICATION_WORKER_BATCH_SIZE:-20}
       NOTIFICATION_WORKER_LOCK_TIMEOUT_SECONDS: ${NOTIFICATION_WORKER_LOCK_TIMEOUT_SECONDS:-300}
@@ -414,7 +417,7 @@ services:
     ports:
       - "${COMPASS_STAGING_PORT:-8080}:8080"
     volumes:
-      - ./deploy/nginx/compass.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/oci/nginx/compass.conf:/etc/nginx/conf.d/default.conf:ro
       - compass_static:/static:ro
     restart: unless-stopped
 

@@ -8,6 +8,9 @@ OCI.
 The stack is pinned to `ap-singapore-1` and creates only the approved staging
 resource families:
 
+OCI/Linux-only deployment assets used by the release bundle live under
+`deploy/oci`; shared container runtime wiring remains under `deploy/`.
+
 - VCN, Internet Gateway, Service Gateway, route table, subnets, security list,
   NSGs, and NSG rules;
 - one paid `VM.Standard.E5.Flex` instance at 2 OCPUs/12 GB with a 50 GB boot
@@ -30,7 +33,9 @@ Secret values are not Terraform variables.
 
 ## Resource Manager workflow
 
-1. Run `scripts/verify_oci_staging_policy.sh` from the repository root.
+1. Run `scripts/unix/verify_oci_staging_policy.sh` (or
+   `scripts/windows/verify_oci_staging_policy.ps1` on Windows) from the
+   repository root.
 2. Create a zip containing only the files in this directory. Do not include
    Terraform state or any `.tfvars` file.
 3. Upload the zip to the existing Resource Manager stack. Do not create a
@@ -61,16 +66,20 @@ reachable through Bastion only.
 1. Read Resource Manager outputs for the instance private/public IPs, LB IP,
    Bastion OCID, Vault OCID, and bucket names.
 2. From a clean, reviewed commit, run
-   `scripts/verify_staging_release_policy.sh` and
-   `scripts/oci/package_staging_release.sh /tmp/compass-staging-release`.
+   `scripts/unix/verify_staging_release_policy.sh` and
+   `COMPASS_IMAGE_ARCH=amd64 COMPASS_IMAGE_REF=localhost/compass:staging scripts/oci/unix/package_staging_release.sh /tmp/compass-staging-release`.
+   The current `VM.Standard.E5.Flex` target uses `amd64`; the release helper
+   also accepts `arm64` for an ARM64 target and never assumes the architecture
+   of the machine running the script.
    Transfer only the generated image archive, release bundle, and manifest
    through a Bastion-managed SSH session. Never transfer the repository or
    local runtime data.
-3. Create root-owned Podman secrets from the OCI Vault secret map.
+3. Create root-owned Podman secrets from the OCI Vault secret map with
+   `deploy/oci/bootstrap_vault_podman_secrets.sh`.
 4. Start the self-contained `compose.staging.yaml` with
    `/etc/compass/staging.env`.
 5. Run migrations, static collection, and read-only readiness checks against
    the blank database. Do not run demo seed commands.
 6. Verify the HTTPS health endpoint and the health-only 503 boundary. Provider
-   credentials may be staged for readiness, but SMTP, Turnstile verification,
-   notification, and real user-flow activation remain deferred.
+   credentials may be staged for readiness, but external provider acceptance,
+   Turnstile verification, and real user-flow activation remain deferred.
