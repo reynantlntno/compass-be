@@ -62,10 +62,7 @@ def resolve_runtime_setting(policy_key: str, setting_key: str, *, at=None):
     if config.get("setting_key") != setting_key or "value" not in config:
         return default
     value = config["value"]
-    if isinstance(default, bool):
-        return value if isinstance(value, bool) else default
-    if isinstance(default, int) and not isinstance(default, bool):
-        return value if isinstance(value, int) and not isinstance(value, bool) else default
-    if isinstance(default, str):
-        return value if isinstance(value, str) else default
-    return value
+    try:
+        return spec.validate(value)
+    except ValueError:
+        return default

@@ -1,15 +1,21 @@
 import datetime
 import logging
+import secrets
 import uuid
 from urllib.parse import urlencode, urljoin
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.contrib.sessions.models import Session
 from django.core.validators import validate_email
 from django.db import transaction
 from django.utils import timezone
 
-from apps.account_security.models import AccountRecoveryRequest, TwoStepChallenge, TrustedDevice
+from apps.account_security.models import (
+    AccountRecoveryRequest,
+    ApiSession,
+    ApiSessionStatusChoices,
+    TwoStepChallenge,
+    TrustedDevice,
+)
 from apps.account_security.email_evidence import has_verified_current_email, record_verified_email_evidence
 from apps.account_security.tokens import (
     generate_random_token,
@@ -23,6 +29,7 @@ from apps.account_security.tokens import (
     parse_recovery_token,
     RECOVERY_TOKEN_VERSION,
 )
+from apps.account_security.network import classify_network_class
 from apps.account_security.adapters import send_security_email
 from apps.account_security.policies import (
     is_2fa_required_for_user,
@@ -40,6 +47,7 @@ from apps.account_security.abuse_controls import (
 )
 from apps.accounts.models import RoleChoices
 from apps.common.django_adapters import ModelValidationError
+from apps.common.exceptions import AssuranceRequiredError
 from apps.governance.runtime_config import resolve_runtime_setting
 
 logger = logging.getLogger(__name__)
@@ -265,16 +273,16 @@ def request_staff_assisted_recovery(
     email_ownership_attested: bool = False,
     ip: str = None,
     user_agent: str = None,
-    assurance_marker=None,
     assurance_token=None,
     expected_security_stamp=None,
 ):
     """Create a recovery request only after an assured IT Admin review."""
     assured, _ = validate_request_assurance(
         actor,
-        marker=assurance_marker,
         token=assurance_token,
     )
+    if not assured:
+        raise AssuranceRequiredError()
     if target is not None:
         try:
             target = User.objects.select_for_update().get(pk=target.pk)
@@ -293,7 +301,7 @@ def request_staff_assisted_recovery(
             outcome="stale_confirmation", ip=ip, user_agent=user_agent,
         )
         return False, "stale_confirmation"
-    if not assured or not can_start_staff_assisted_recovery(actor, target):
+    if not can_start_staff_assisted_recovery(actor, target):
         _log_staff_recovery_outcome(
             actor, target, reason_category=reason_category,
             outcome="assurance_or_target_denied", ip=ip, user_agent=user_agent,
@@ -590,8 +598,16 @@ def create_twostep_challenge(
         expires_at=expiry,
         last_sent_at=timezone.now(),
         security_stamp=user.auth_security_stamp,
-        assurance_policy_version=(ASSURANCE_POLICY_VERSION if purpose == "login" else ""),
-        assurance_context=(ASSURANCE_CONTEXT if purpose == "login" else ""),
+        assurance_policy_version=(
+            ASSURANCE_POLICY_VERSION
+            if purpose in {"login", "sensitive_action"}
+            else ""
+        ),
+        assurance_context=(
+            ASSURANCE_CONTEXT
+            if purpose in {"login", "sensitive_action"}
+            else ""
+        ),
         metadata_json={
             "pending_nonce_hash": hash_token(pending_nonce) if pending_nonce else ""
         },
@@ -694,14 +710,19 @@ def verify_otp(
         if str(challenge.user_id) != str(expected_user_id) or challenge.purpose != purpose:
             return False
         expected_nonce_hash = (challenge.metadata_json or {}).get("pending_nonce_hash", "")
-        if challenge.purpose == "login":
+        if pending_nonce is not None:
+            if not expected_nonce_hash or not compare_tokens(expected_nonce_hash, hash_token(pending_nonce)):
+                return False
+        if challenge.purpose in {"login", "sensitive_action", "two_factor_change"}:
+            if challenge.security_stamp != current_user.auth_security_stamp:
+                challenge.status = "revoked"
+                challenge.save(update_fields=["status", "updated_at"])
+                return False
+        if challenge.purpose in {"login", "sensitive_action"}:
             if not expected_nonce_hash or not pending_nonce:
                 return False
-            if not compare_tokens(expected_nonce_hash, hash_token(pending_nonce)):
-                return False
             if (
-                challenge.security_stamp != current_user.auth_security_stamp
-                or challenge.assurance_policy_version != ASSURANCE_POLICY_VERSION
+                challenge.assurance_policy_version != ASSURANCE_POLICY_VERSION
                 or challenge.assurance_context != ASSURANCE_CONTEXT
             ):
                 challenge.status = "revoked"
@@ -799,14 +820,26 @@ def resend_otp(
             )
             return False, "Verification resend limit reached. Start sign-in again."
         nonce_hash = (challenge.metadata_json or {}).get("pending_nonce_hash", "")
+        if pending_nonce is not None and (
+            str(challenge.user_id) != str(expected_user_id)
+            or not nonce_hash
+            or not compare_tokens(nonce_hash, hash_token(pending_nonce))
+        ):
+            return False, "Verification request has expired or is invalid."
+        if challenge.purpose in {"login", "sensitive_action", "two_factor_change"} and (
+            challenge.security_stamp != current_user.auth_security_stamp
+        ):
+            return False, "Verification request has expired or is invalid."
+        if challenge.purpose in {"login", "sensitive_action"} and (
+            challenge.assurance_policy_version != ASSURANCE_POLICY_VERSION
+            or challenge.assurance_context != ASSURANCE_CONTEXT
+        ):
+            return False, "Verification request has expired or is invalid."
         if challenge.purpose == "login" and (
             str(challenge.user_id) != str(expected_user_id)
             or not nonce_hash
             or not pending_nonce
             or not compare_tokens(nonce_hash, hash_token(pending_nonce))
-            or challenge.security_stamp != current_user.auth_security_stamp
-            or challenge.assurance_policy_version != ASSURANCE_POLICY_VERSION
-            or challenge.assurance_context != ASSURANCE_CONTEXT
         ):
             return False, "Verification request has expired or is invalid."
 
@@ -874,75 +907,74 @@ def resend_otp(
     return True, "A new verification code has been sent to your email."
 
 
-def issue_trusted_device(
-    user,
-    user_agent: str,
-    *,
-    verified_challenge_id,
-    pending_nonce: str = None,
-    active_session=None,
-    ip: str = None,
-) -> tuple:
-    """Issue a new trusted device for a user.
+def _trusted_device_max_active() -> int:
+    return int(_security_setting("ACCOUNT_SECURITY_TRUSTED_DEVICE_MAX_ACTIVE"))
 
-    Returns a tuple of (device_token, expiry_datetime) or (None, None) if disabled.
-    """
-    if active_session is None:
-        return None, None
+
+def issue_trusted_device_after_otp(
+    challenge,
+    *,
+    user_agent: str = "",
+    ip: str | None = None,
+) -> tuple[str | None, object | None, object | None]:
+    """Issue a 256-bit remembered-device credential after a verified login OTP."""
+
     with transaction.atomic():
-        try:
-            challenge = TwoStepChallenge.objects.select_for_update().get(
-                id=verified_challenge_id,
-                user_id=user.pk,
-                purpose="login",
-                status="verified",
-            )
-        except (TwoStepChallenge.DoesNotExist, ValueError):
-            return None, None
-        try:
-            current_user = User.objects.select_for_update().get(pk=user.pk, is_active=True)
-        except User.DoesNotExist:
-            return None, None
-        metadata = dict(challenge.metadata_json or {})
-        nonce_hash = metadata.get("pending_nonce_hash", "")
-        now = timezone.now()
-        absolute_deadline = challenge.created_at + datetime.timedelta(
-            seconds=_security_setting("ACCOUNT_SECURITY_LOGIN_CHALLENGE_MAX_LIFETIME_SECONDS")
+        challenge = (
+            TwoStepChallenge.objects.select_for_update()
+            .select_related("user")
+            .filter(pk=getattr(challenge, "pk", challenge), purpose="login", status="verified")
+            .first()
         )
-        if challenge.trusted_device_issued_at or not challenge.verified_at:
-            return None, None
+        if challenge is None:
+            return None, None, None
+        current_user = User.objects.select_for_update().filter(
+            pk=challenge.user_id,
+            is_active=True,
+        ).first()
+        if current_user is None or challenge.trusted_device_issued_at:
+            return None, None, None
         if (
-            str(active_session.get("pending_2fa_user_id", "")) != str(current_user.pk)
-            or str(active_session.get("pending_2fa_challenge_id", "")) != str(challenge.id)
-            or active_session.get("pending_2fa_nonce") != pending_nonce
-            or not pending_nonce
-            or not nonce_hash
-            or not compare_tokens(nonce_hash, hash_token(pending_nonce))
-            or challenge.delivery_email_hash
-            != hash_identifier(_normalized_usable_email(current_user))
-            or challenge.security_stamp != current_user.auth_security_stamp
+            challenge.security_stamp != current_user.auth_security_stamp
             or challenge.assurance_policy_version != ASSURANCE_POLICY_VERSION
             or challenge.assurance_context != ASSURANCE_CONTEXT
-            or challenge.verified_at < now - datetime.timedelta(minutes=5)
-            or now >= absolute_deadline
         ):
-            return None, None
-
+            return None, None, None
         duration_days = get_trusted_device_duration_days(current_user)
         if duration_days <= 0:
-            return None, None
+            return None, None, None
+        now = timezone.now()
+        if not challenge.verified_at or challenge.verified_at > now:
+            return None, None, None
+        lifetime = datetime.timedelta(
+            seconds=_security_setting("ACCOUNT_SECURITY_LOGIN_CHALLENGE_MAX_LIFETIME_SECONDS")
+        )
+        if challenge.created_at + lifetime <= now:
+            return None, None, None
 
-        raw_device_token = generate_random_token()
-        device_hash = hash_token(raw_device_token)
-        expiry = timezone.now() + datetime.timedelta(days=duration_days)
+        active_devices = list(
+            TrustedDevice.objects.select_for_update()
+            .filter(user=current_user, status="active", trusted_until__gt=now)
+            .order_by("created_at", "id")
+        )
+        max_active = _trusted_device_max_active()
+        for old_device in active_devices[: max(0, len(active_devices) - max_active + 1)]:
+            old_device.status = "revoked"
+            old_device.revoked_at = now
+            old_device.revoked_reason = "active_device_limit"
+            old_device.save(update_fields=["status", "revoked_at", "revoked_reason", "updated_at"])
+
+        raw_device_token = secrets.token_urlsafe(32)
+        expiry = now + datetime.timedelta(days=duration_days)
         label = get_safe_user_agent_summary(user_agent)
         device = TrustedDevice.objects.create(
             user=current_user,
-            device_hash=device_hash,
+            device_hash=hash_token(raw_device_token),
             label=label,
             status="active",
             trusted_until=expiry,
             request_ip_hash=hash_identifier(ip) if ip else "",
+            network_class=classify_network_class(ip),
             security_stamp=current_user.auth_security_stamp,
             assurance_policy_version=ASSURANCE_POLICY_VERSION,
             assurance_context=ASSURANCE_CONTEXT,
@@ -955,83 +987,114 @@ def issue_trusted_device(
         target_model="account_security.TrustedDevice",
         target_object_id=str(device.id),
         severity="INFO",
-        actor_user=user,
+        actor_user=current_user,
         ip_address=ip,
         user_agent=user_agent,
-        metadata={"device_id": str(device.id), "device_label": label}
+        metadata={"device_id": str(device.id), "device_label": label},
     )
+    return raw_device_token, expiry, device.id
 
-    return raw_device_token, expiry
+
+def issue_trusted_device(
+    user,
+    user_agent: str,
+    *,
+    verified_challenge_id,
+    pending_nonce: str = None,
+    active_session=None,
+    ip: str = None,
+) -> tuple:
+    """Backward-compatible wrapper for the OTP-bound issuer.
+
+    The legacy Django-session projection is intentionally no longer
+    consulted; the verified challenge is the source of truth.
+    """
+
+    receipt = issue_trusted_device_after_otp(
+        TwoStepChallenge(id=verified_challenge_id),
+        user_agent=user_agent,
+        ip=ip,
+    )
+    return (receipt[0], receipt[1]) if receipt else (None, None)
+
+
+def consume_trusted_device_for_login(
+    user,
+    device_token: str,
+    *,
+    ip: str | None = None,
+    user_agent: str | None = None,
+) -> tuple[str, object, object] | None:
+    """Validate and rotate a remembered-device credential without extending it."""
+
+    if (
+        not device_token
+        or not isinstance(device_token, str)
+        or len(device_token) > 512
+        or not user
+        or not user.is_authenticated
+    ):
+        return None
+    now = timezone.now()
+    with transaction.atomic():
+        # Keep lock ordering aligned with issuance and account-state changes:
+        # user first, then device.  This serializes concurrent rotations for
+        # one account without introducing a user/device lock inversion.
+        current_user = User.objects.select_for_update().filter(
+            pk=getattr(user, "pk", None),
+            is_active=True,
+        ).first()
+        device = (
+            TrustedDevice.objects.select_for_update()
+            .filter(device_hash=hash_token(device_token))
+            .first()
+        )
+        if device is None or current_user is None or device.user_id != current_user.pk:
+            return None
+        duration_days = get_trusted_device_duration_days(current_user)
+        current_label = get_safe_user_agent_summary(user_agent or "")
+        valid = (
+            device.status == "active"
+            and device.trusted_until > now
+            and duration_days > 0
+            and device.security_stamp == current_user.auth_security_stamp
+            and device.assurance_policy_version == ASSURANCE_POLICY_VERSION
+            and device.assurance_context == ASSURANCE_CONTEXT
+            and device.label == current_label
+        )
+        if not valid:
+            if device.status == "active" and device.trusted_until <= now:
+                device.status = "expired"
+                device.save(update_fields=["status", "updated_at"])
+            return None
+        raw_rotated = secrets.token_urlsafe(32)
+        device.device_hash = hash_token(raw_rotated)
+        device.last_used_at = now
+        device.save(update_fields=["device_hash", "last_used_at", "updated_at"])
+        expiry = device.trusted_until
+        device_id = device.id
+    log_security_event(
+        action_type="trusted_device_used",
+        target_model="account_security.TrustedDevice",
+        target_object_id=str(device_id),
+        severity="INFO",
+        actor_user=current_user,
+        ip_address=ip,
+        user_agent=user_agent,
+        metadata={"device_id": str(device_id)},
+    )
+    return raw_rotated, expiry, device_id
 
 
 def verify_trusted_device(user, device_token: str, ip: str = None, user_agent: str = None) -> bool:
-    """Verify that the provided device token is valid and active for the user."""
-    if not device_token or not user or not user.is_authenticated:
-        return False
+    """Compatibility verifier; successful use still rotates the stored hash."""
 
-    device_hash = hash_token(device_token)
-    try:
-        current_user = User.objects.get(pk=user.pk, is_active=True)
-        device = TrustedDevice.objects.get(device_hash=device_hash)
-        reason = None
-        if device.user_id != current_user.pk:
-            reason = "owner_mismatch"
-        elif device.status != "active":
-            reason = "inactive_device"
-        elif device.trusted_until <= timezone.now():
-            device.status = "expired"
-            device.save(update_fields=["status", "updated_at"])
-            reason = "expired_device"
-        else:
-            duration_days = get_trusted_device_duration_days(current_user)
-            if duration_days <= 0:
-                reason = "disabled_for_role"
-            elif (
-                device.security_stamp != current_user.auth_security_stamp
-                or device.assurance_policy_version != ASSURANCE_POLICY_VERSION
-                or device.assurance_context != ASSURANCE_CONTEXT
-            ):
-                reason = "stale_security_context"
-            elif device.trusted_until > device.created_at + datetime.timedelta(days=duration_days, minutes=5):
-                reason = "unbounded_lifetime"
-        if reason:
-            if device.status == "active" and reason in {
-                "disabled_for_role",
-                "stale_security_context",
-                "unbounded_lifetime",
-            }:
-                device.status = "revoked"
-                device.revoked_at = timezone.now()
-                device.revoked_reason = reason
-                device.save(
-                    update_fields=["status", "revoked_at", "revoked_reason", "updated_at"]
-                )
-            log_security_event(
-                action_type="trusted_device_rejected",
-                target_model="account_security.TrustedDevice",
-                target_object_id=str(device.id),
-                severity="WARNING",
-                actor_user=user,
-                ip_address=ip,
-                user_agent=user_agent,
-                metadata={"device_id": str(device.id), "reason": reason},
-            )
-            return False
-        # Update last used timestamp
-        device.save()  # auto_now on last_used_at handles it
-        log_security_event(
-            action_type="trusted_device_used",
-            target_model="account_security.TrustedDevice",
-            target_object_id=str(device.id),
-            severity="INFO",
-            actor_user=user,
-            ip_address=ip,
-            user_agent=user_agent,
-            metadata={"device_id": str(device.id)}
-        )
-        return True
-    except (TrustedDevice.DoesNotExist, User.DoesNotExist):
-        return False
+    return consume_trusted_device_for_login(
+        user,
+        device_token,
+        ip=ip,
+        user_agent=user_agent,
+    ) is not None
 
 
 @transaction.atomic
@@ -1094,30 +1157,46 @@ def revoke_all_trusted_devices_for_user(
     return count
 
 
-def _iter_active_sessions_for_user(user):
-    """Yield active Django sessions belonging to one user."""
-    user_id_str = str(user.pk)
-    for session in Session.objects.select_for_update().filter(expire_date__gte=timezone.now()):
-        try:
-            session_data = session.get_decoded()
-        except Exception:
-            # A malformed or stale session must not prevent other sessions
-            # from being inspected or terminated.
-            continue
-        if str(session_data.get("_auth_user_id")) == user_id_str:
-            yield session
-
-
 @transaction.atomic
 def terminate_other_sessions(current_session_key: str, user, ip: str = None, user_agent: str = None) -> int:
-    """Sign out all active sessions except the current one."""
-    terminated_count = 0
+    """Sign out all active API sessions except the current token family."""
+    from apps.account_security.api_tokens import revoke_api_session
 
-    for session in _iter_active_sessions_for_user(user):
-        if session.session_key == current_session_key:
+    current_id = str(current_session_key or "")
+    try:
+        current_uuid = uuid.UUID(current_id)
+    except (AttributeError, TypeError, ValueError):
+        current_uuid = None
+    current = (
+        ApiSession.objects.filter(pk=current_uuid, user=user).first()
+        if current_uuid is not None
+        else None
+    )
+    if current is None:
+        from apps.account_security.tokens import get_session_action_token
+
+        current = next(
+            (
+                row
+                for row in ApiSession.objects.filter(user=user, status=ApiSessionStatusChoices.ACTIVE)
+                if compare_tokens(current_id, get_session_action_token(str(row.id)))
+            ),
+            None,
+        )
+    terminated_count = 0
+    for session in ApiSession.objects.select_for_update().filter(
+        user=user,
+        status=ApiSessionStatusChoices.ACTIVE,
+    ):
+        if current is not None and session.id == current.id:
             continue
-        session.delete()
-        terminated_count += 1
+        terminated_count += revoke_api_session(
+            session.id,
+            actor_user=user,
+            ip=ip,
+            user_agent=user_agent,
+            reason="user_terminated_others",
+        )
 
     # The action itself is security-relevant even when there were no other
     # sessions. Keep the user's activity history truthful for both outcomes.
@@ -1141,11 +1220,15 @@ def terminate_other_sessions(current_session_key: str, user, ip: str = None, use
 
 @transaction.atomic
 def terminate_all_sessions_for_user(user, ip: str = None, user_agent: str = None) -> int:
-    """Invalidate every active Django session after a recovery/password reset."""
-    terminated_count = 0
-    for session in _iter_active_sessions_for_user(user):
-        session.delete()
-        terminated_count += 1
+    """Invalidate every active API session after a recovery/password reset."""
+    from apps.account_security.api_tokens import revoke_all_api_tokens_for_user
+
+    terminated_count = revoke_all_api_tokens_for_user(
+        user,
+        ip=ip,
+        user_agent=user_agent,
+        reason="password_reset",
+    )
     log_security_event(
         action_type="sessions_terminated_bulk",
         target_model="accounts.User",
@@ -1171,15 +1254,41 @@ def terminate_session(
     if not session_token or not user:
         return False
 
-    current_token = get_session_action_token(current_session_key)
-    if current_token and compare_tokens(session_token, current_token):
+    from apps.account_security.api_tokens import revoke_api_session
+
+    current_id = str(current_session_key or "")
+    from apps.account_security.tokens import get_session_action_token
+
+    if current_id and (
+        session_token == current_id
+        or compare_tokens(session_token, get_session_action_token(current_id))
+    ):
         return False
 
-    for session in _iter_active_sessions_for_user(user):
-        candidate_token = get_session_action_token(session.session_key)
-        if not compare_tokens(session_token, candidate_token):
-            continue
-        session.delete()
+    try:
+        candidate_id = uuid.UUID(str(session_token))
+    except (AttributeError, TypeError, ValueError):
+        candidate_id = None
+    candidate = None
+    if candidate_id is not None:
+        candidate = ApiSession.objects.filter(
+            user=user,
+            status=ApiSessionStatusChoices.ACTIVE,
+            id=candidate_id,
+        ).first()
+    if candidate is None:
+        for row in ApiSession.objects.filter(user=user, status=ApiSessionStatusChoices.ACTIVE):
+            if compare_tokens(session_token, get_session_action_token(str(row.id))):
+                candidate = row
+                break
+    if candidate is not None:
+        revoke_api_session(
+            candidate.id,
+            actor_user=user,
+            ip=ip,
+            user_agent=user_agent,
+            reason="user_terminated_session",
+        )
         log_security_event(
             action_type="session_terminated",
             target_model="accounts.User",

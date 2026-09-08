@@ -29,6 +29,7 @@ class ErrorCode(StrEnum):
     PAYLOAD_TOO_LARGE = "payload_too_large"
     RATE_LIMITED = "rate_limited"
     DEPENDENCY_FAILURE = "dependency_failure"
+    ASSURANCE_REQUIRED = "assurance_required"
     INTERNAL_ERROR = "internal_error"
 
 
@@ -109,6 +110,13 @@ class PermissionDeniedError(DomainError):
 
     code = ErrorCode.PERMISSION
     public_message = "You do not have permission to perform this action."
+
+
+class AssuranceRequiredError(DomainError):
+    """Raised when a sensitive action needs a recent OTP step-up."""
+
+    code = ErrorCode.ASSURANCE_REQUIRED
+    public_message = "Additional verification is required."
 
 
 class WorkflowError(DomainError):

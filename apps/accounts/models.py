@@ -16,6 +16,7 @@ import uuid
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.utils import timezone
 
 from apps.accounts.managers import UserManager
 
@@ -133,6 +134,14 @@ class User(AbstractBaseUser, PermissionsMixin):
             revoke_all_api_tokens_for_user(
                 self,
                 reason="account_security_state_changed",
+            )
+            from apps.account_security.models import TrustedDevice
+
+            TrustedDevice.objects.filter(user=self, status="active").update(
+                status="revoked",
+                revoked_at=timezone.now(),
+                revoked_reason="account_security_state_changed",
+                updated_at=timezone.now(),
             )
         return result
 

@@ -8,6 +8,17 @@ from apps.access_control.rules import (
 from apps.governance.runtime_config import resolve_runtime_setting
 
 
+def is_student_two_factor_enabled(user) -> bool:
+    """Return explicit student enrollment state; absent rows are disabled."""
+    if not user or not getattr(user, "is_authenticated", False) or not is_student(user):
+        return False
+    from apps.account_security.models import StudentTwoFactorEnrollment
+
+    return bool(
+        StudentTwoFactorEnrollment.objects.filter(user=user, enabled=True).exists()
+    )
+
+
 def is_2fa_required_for_user(user) -> bool:
     """Determine if 2FA is required for the user based on their COMPASS role.
 
@@ -16,6 +27,11 @@ def is_2fa_required_for_user(user) -> bool:
     """
     if not user or not user.is_authenticated:
         return False
+
+    # Student enrollment is self-service state: once enabled, it must require
+    # OTP regardless of the separate internal-staff enforcement switch.
+    if is_student(user):
+        return is_student_two_factor_enabled(user)
 
     if not resolve_runtime_setting(
         "security.account_security_controls",
@@ -33,10 +49,6 @@ def is_2fa_required_for_user(user) -> bool:
         return True
     if is_gco_staff(user):
         return True
-
-    # Students are optional/recommended
-    if is_student(user):
-        return False
 
     return False
 
@@ -56,16 +68,11 @@ def get_trusted_device_duration_days(user) -> int:
     if not user or not user.is_authenticated:
         return 0
 
+    # IT Admins always complete OTP.  The legacy duration/disable controls
+    # remain in the governed catalog for compatibility, but cannot enable a
+    # remembered-device bypass for this role.
     if getattr(user, "is_superuser", False) or is_it_admin(user):
-        if resolve_runtime_setting(
-            "security.account_security_controls",
-            "ACCOUNT_SECURITY_DISABLE_IT_ADMIN_TRUSTED_DEVICES",
-        ):
-            return 0
-        return resolve_runtime_setting(
-            "security.account_security_controls",
-            "ACCOUNT_SECURITY_TRUSTED_DEVICE_DAYS_IT_ADMIN",
-        )
+        return 0
 
     if is_counselor(user) or is_gco_staff(user):
         return resolve_runtime_setting(
@@ -74,6 +81,8 @@ def get_trusted_device_duration_days(user) -> int:
         )
 
     if is_student(user):
+        if not is_student_two_factor_enabled(user):
+            return 0
         return resolve_runtime_setting(
             "security.account_security_controls",
             "ACCOUNT_SECURITY_TRUSTED_DEVICE_DAYS_STUDENT",

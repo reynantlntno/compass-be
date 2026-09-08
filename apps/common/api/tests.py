@@ -465,6 +465,9 @@ class ApiOperationRegistryTests(SimpleTestCase):
         expected.update({
             "audit_entries_list", "audit_entry_detail",
             "me_activity_list", "me_sessions_list", "me_trusted_devices_list",
+            "me_two_factor_status", "me_two_factor_change_request",
+            "me_two_factor_change_verify", "me_two_factor_change_resend",
+            "me_assurance_challenge", "me_assurance_verify", "me_assurance_resend",
             "me_session_revoke", "me_sessions_revoke_others",
             "me_trusted_device_revoke", "me_trusted_devices_revoke_all",
             "me_password_change", "auth_recovery_request", "auth_recovery_reset",
@@ -2977,10 +2980,7 @@ class CounselingResponseDocumentationTests(SimpleTestCase):
             components["SessionPageSchema"]["properties"]["items"]["items"]["$ref"],
             "#/components/schemas/ActiveSessionProjectionSchema",
         )
-        self.assertEqual(
-            components["SessionPageSchema"]["properties"]["decode"]["$ref"],
-            "#/components/schemas/SessionDecodeStateSchema",
-        )
+        self.assertNotIn("decode", components["SessionPageSchema"]["properties"])
         self.assertEqual(
             components["TrustedDevicePageSchema"]["properties"]["items"]["items"]["$ref"],
             "#/components/schemas/TrustedDeviceProjectionSchema",
@@ -2995,7 +2995,6 @@ class CounselingResponseDocumentationTests(SimpleTestCase):
             "ActivityEntrySchema",
             "SessionPageSchema",
             "ActiveSessionProjectionSchema",
-            "SessionDecodeStateSchema",
             "TrustedDevicePageSchema",
             "TrustedDeviceProjectionSchema",
             "AccountSecurityDisplayStateSchema",

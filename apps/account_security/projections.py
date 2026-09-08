@@ -12,7 +12,6 @@ Distinguishable states (exported constants):
 - ``approximate``   — coarse, intentionally imprecise value (network class only).
 - ``not_captured``  — absent, or an old hash-only record we will not reconstruct.
 - ``unavailable``   — present but invalid / undecodable / sanitation failed.
-- ``not_authorized``— the caller is not attributed to any session.
 """
 
 import re
@@ -32,7 +31,6 @@ STATE_AVAILABLE = "available"
 STATE_APPROXIMATE = "approximate"
 STATE_NOT_CAPTURED = "not_captured"
 STATE_UNAVAILABLE = "unavailable"
-STATE_NOT_AUTHORIZED = "not_authorized"
 
 # A stored device summary matching these is treated as "we never captured a
 # real browser/OS" and is presented as not_captured — never reconstructed.
@@ -112,23 +110,22 @@ ACTIVITY_FAILURE_ACTIONS = frozenset(
 )
 
 
-def project_timestamp(value) -> str:
+def project_timestamp(value) -> str | None:
     """Return one consistent ISO-8601 timestamp representation.
 
     Accepts a datetime or an ISO-8601/date-time string and normalizes both to
-    ``localtime(...).isoformat()``.  This keeps activity ``created_at`` and
-    session timestamps in the same JSON-ready string form.  Missing or
-    unparseable values become ``"Not recorded"``.
+    ``localtime(...).isoformat()``.  Missing values remain ``None`` so API
+    timestamp fields never mix presentation copy with machine-readable data.
     """
     if value is None or value == "":
-        return "Not recorded"
+        return None
     if isinstance(value, str):
         parsed = parse_datetime(value)
         if parsed is None:
-            return "Not recorded"
+            return None
         value = parsed
     if not isinstance(value, timezone.datetime):
-        return "Not recorded"
+        return None
     if timezone.is_naive(value):
         value = timezone.make_aware(value, timezone.get_current_timezone())
     return timezone.localtime(value).isoformat()
@@ -262,7 +259,7 @@ def project_user_activity_entry(log) -> dict:
     return result
 
 
-def project_trusted_device(device) -> dict:
+def project_trusted_device(device, *, current_device_id=None) -> dict:
     """Project a trusted device without exposing its verifier or network hash."""
     return {
         "id": str(device.id),
@@ -271,48 +268,19 @@ def project_trusted_device(device) -> dict:
         "trusted_until": project_timestamp(device.trusted_until),
         "last_used_at": project_timestamp(device.last_used_at),
         "revoked_at": project_timestamp(device.revoked_at),
+        "is_current": str(device.id) == str(current_device_id or ""),
     }
 
 
-def project_session_row(session, data, current_session_key=None) -> dict:
-    """Project one decoded active-session row into the bounded contract.
-
-    ``session_token`` is an opaque, reversible action token; the raw Django
-    session key is never exposed.  Missing metadata projects as
-    ``not_captured``, and an invalid class as ``unavailable``.
-    """
+def project_session_row(session, current_session_id=None) -> dict:
+    """Project one real opaque-token family into the bounded contract."""
     return {
-        "session_token": get_session_action_token(session.session_key),
-        "is_current": session.session_key == current_session_key,
-        "device": project_device(data.get("_compass_session_device_summary")),
-        "network": project_network(data.get("_compass_session_network_class")),
-        "first_seen": project_timestamp(data.get("_compass_session_started_at")),
-        "last_activity": project_timestamp(data.get("_compass_session_last_activity_at")),
-        "expire_date": project_timestamp(session.expire_date),
-    }
-
-
-def project_decode_state(undecodable_count: int, *, authorized: bool = True) -> dict:
-    """Return a safe decode-diagnostic state without exposing any count.
-
-    The undecodable count is used only to choose the state and stays server-side;
-    it is never included in the returned payload.  An unauthorized (anonymous)
-    caller receives ``not_authorized`` rather than ``available``.
-    """
-    if not authorized:
-        return {
-            "state": STATE_NOT_AUTHORIZED,
-            "reason_code": "not_authorized",
-            "display_label": "Not authorized",
-        }
-    if (undecodable_count or 0) > 0:
-        return {
-            "state": STATE_UNAVAILABLE,
-            "reason_code": "some_sessions_undecodable",
-            "display_label": "Some session details are temporarily unavailable",
-        }
-    return {
-        "state": STATE_AVAILABLE,
-        "reason_code": "sessions_decoded_successfully",
-        "display_label": "Session details available",
+        "session_token": get_session_action_token(str(session.id)),
+        "is_current": str(session.id) == str(current_session_id or ""),
+        "device": project_device(session.device_summary),
+        "network": project_network(session.network_class),
+        "started_at": project_timestamp(session.started_at),
+        "last_activity_at": project_timestamp(session.last_activity_at),
+        "expires_at": project_timestamp(session.absolute_expires_at),
+        "authentication_method": str(session.authentication_method),
     }

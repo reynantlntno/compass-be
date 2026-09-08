@@ -60,16 +60,11 @@ def hash_token(token: str) -> str:
     return hash_identifier(token)
 
 
-def get_session_action_token(session_key: str) -> str:
-    """Return an opaque user-scoped action token for a Django session key.
-
-    The raw Django session key must stay server-side. A domain-separated HMAC
-    lets an authenticated user request an action for one of their sessions
-    without putting the bearer session key into rendered HTML.
-    """
-    if not session_key:
+def get_session_action_token(session_identifier: str) -> str:
+    """Return an opaque user-scoped action token for an API session UUID."""
+    if not session_identifier:
         return ""
-    return hash_identifier(f"account-session:{session_key}")
+    return hash_identifier(f"account-session:{session_identifier}")
 
 
 def compare_tokens(val1: str, val2: str) -> bool:

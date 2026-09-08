@@ -180,7 +180,6 @@ def request_staff_account_recovery(
     command: StaffAssistedRecoveryCommand,
     ip: str = "",
     user_agent: str = "",
-    assurance_marker=None,
     assurance_token=None,
 ) -> dict:
     """Queue a safe recovery email for an active staff account.
@@ -218,7 +217,6 @@ def request_staff_account_recovery(
         email_ownership_attested=command.email_ownership_attested,
         ip=ip,
         user_agent=user_agent,
-        assurance_marker=assurance_marker,
         assurance_token=assurance_token,
     )
     if not accepted:

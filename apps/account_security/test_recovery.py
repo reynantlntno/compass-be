@@ -8,15 +8,10 @@ from io import StringIO
 from unittest.mock import patch
 
 from django.core.management import CommandError, call_command
-from django.contrib.sessions.models import Session
 from django.test import Client, TestCase, override_settings
 from django.utils import timezone
 
 from apps.account_security.api_tokens import issue_token_pair
-from apps.account_security.assurance import (
-    ASSURANCE_SESSION_KEY,
-    build_internal_assurance_marker,
-)
 from apps.account_security.commands import (
     ITAdminRecoveryCommand,
     StaffAssistedRecoveryCommand,
@@ -24,6 +19,8 @@ from apps.account_security.commands import (
 from apps.account_security.email_evidence import record_verified_email_evidence
 from apps.account_security.models import (
     AccountRecoveryRequest,
+    ApiSession,
+    ApiSessionStatusChoices,
     ApiToken,
     ApiTokenStatusChoices,
     TrustedDevice,
@@ -32,7 +29,7 @@ from apps.account_security.application_services import request_staff_account_rec
 from apps.account_security.tokens import hash_identifier, hash_token
 from apps.accounts.models import RoleChoices, User
 from apps.audit.models import AuditLogEntry
-from apps.common.exceptions import PermissionDeniedError, ValidationError
+from apps.common.exceptions import AssuranceRequiredError, PermissionDeniedError, ValidationError
 from apps.profiles.models import CounselorProfile
 from apps.workflow.models import OutboxEvent
 
@@ -58,7 +55,7 @@ class ITAdminRecoveryCommandTests(TestCase):
         old_password = "correct-horse-battery-staple"
         new_password = "new-operator-password-2026!"
         user = make_user("operator@example.test", RoleChoices.IT_ADMIN, password=old_password)
-        issue_token_pair(user, assurance_verified=True)
+        pair = issue_token_pair(user, assurance_verified=True)
         trusted_device = TrustedDevice.objects.create(
             user=user,
             device_hash="device-hash-operator",
@@ -76,13 +73,6 @@ class ITAdminRecoveryCommandTests(TestCase):
             status="pending",
             expires_at=timezone.now() + timedelta(minutes=30),
         )
-
-        from django.contrib.sessions.backends.db import SessionStore
-
-        session = SessionStore()
-        session["_auth_user_id"] = str(user.pk)
-        session["_auth_user_backend"] = "django.contrib.auth.backends.ModelBackend"
-        session.create()
 
         output = StringIO()
         with patch(
@@ -107,7 +97,13 @@ class ITAdminRecoveryCommandTests(TestCase):
             user=user,
             status=ApiTokenStatusChoices.ACTIVE,
         ).exists())
-        self.assertFalse(Session.objects.filter(session_key=session.session_key).exists())
+        self.assertEqual(
+            ApiSession.objects.filter(
+                id=pair.session_id,
+                status=ApiSessionStatusChoices.REVOKED,
+            ).count(),
+            1,
+        )
         self.assertEqual(trusted_device.status, "revoked")
         self.assertEqual(recovery_request.status, "revoked")
         self.assertEqual(output.getvalue().strip(), "IT_ADMIN_RECOVERY_STATUS=completed")
@@ -176,12 +172,6 @@ class StaffAssistedRecoveryApiTests(TestCase):
             verified_by=self.it_admin,
             reason_category="internal_role_policy",
         )
-        session = self.client.session
-        session[ASSURANCE_SESSION_KEY] = build_internal_assurance_marker(
-            self.it_admin,
-            method="otp",
-        )
-        session.save()
         self.access_token = issue_token_pair(
             self.it_admin,
             assurance_verified=True,
@@ -383,23 +373,19 @@ class StaffAssistedRecoveryApiTests(TestCase):
                 new_password="password\nwith-newline",
             )
 
-    def test_application_service_requires_fresh_assurance_marker(self):
+    def test_application_service_requires_fresh_api_session_assurance(self):
         command = StaffAssistedRecoveryCommand(
             target_account_id=self.target.pk,
             reason_category="internal_role_policy",
         )
-        with self.assertRaises(PermissionDeniedError):
+        with self.assertRaises(AssuranceRequiredError):
             request_staff_account_recovery(
                 actor=self.it_admin,
                 command=command,
-                assurance_marker=None,
+                assurance_token=None,
             )
 
     def test_api_token_assurance_allows_recovery_without_session_marker(self):
-        session = self.client.session
-        session.pop(ASSURANCE_SESSION_KEY, None)
-        session.save()
-
         response = self.client.post(
             "/api/v1/auth/staff-recovery/request/",
             data=json.dumps(self._payload()),
@@ -420,11 +406,9 @@ class StaffAssistedRecoveryApiTests(TestCase):
             user=self.it_admin,
             token_type=ApiTokenTypeChoices.ACCESS,
         )
-        stale.issued_at = timezone.now() - timedelta(days=30)
-        stale.save(update_fields=["issued_at", "updated_at"])
-        session = self.client.session
-        session.pop(ASSURANCE_SESSION_KEY, None)
-        session.save()
+        ApiSession.objects.filter(id=stale.session_id).update(
+            last_otp_verified_at=timezone.now() - timedelta(minutes=11),
+        )
 
         response = self.client.post(
             "/api/v1/auth/staff-recovery/request/",

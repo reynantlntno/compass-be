@@ -17,12 +17,14 @@ class ErrorSchema(Schema):
 class LoginRequestSchema(Schema):
     email: str
     password: str
+    trusted_device_token: str | None = None
 
 
 class LoginVerifyRequestSchema(Schema):
     challenge_id: UUID
     pending_nonce: str
     otp: str
+    trust_device: bool = False
 
 
 class RefreshTokenRequestSchema(Schema):
@@ -32,12 +34,22 @@ class RefreshTokenRequestSchema(Schema):
     refresh_token: str | None = None
 
 
+class LogoutRequestSchema(Schema):
+    refresh_token: str | None = None
+
+
+class TrustedDeviceReceiptSchema(Schema):
+    token: str
+    expires_in: int
+
+
 class TokenPairSchema(Schema):
     token_type: str
     access_token: str
     expires_in: int
     refresh_token: str
     refresh_expires_in: int
+    trusted_device: TrustedDeviceReceiptSchema | None = None
 
 
 class AuthSessionReceiptSchema(Schema):
@@ -115,15 +127,10 @@ class ActiveSessionProjectionSchema(Schema):
     is_current: bool
     device: AccountSecurityDisplayStateSchema
     network: AccountSecurityDisplayStateSchema
-    first_seen: str
-    last_activity: str
-    expire_date: str
-
-
-class SessionDecodeStateSchema(Schema):
-    state: str
-    reason_code: str
-    display_label: str
+    started_at: str | None
+    last_activity_at: str | None
+    expires_at: str | None
+    authentication_method: str
 
 
 class SessionPageSchema(Schema):
@@ -131,16 +138,16 @@ class SessionPageSchema(Schema):
     page: int
     page_size: int
     total: int
-    decode: SessionDecodeStateSchema
 
 
 class TrustedDeviceProjectionSchema(Schema):
     id: str
     device: AccountSecurityDisplayStateSchema
     status: str
-    trusted_until: str
-    last_used_at: str
-    revoked_at: str
+    trusted_until: str | None
+    last_used_at: str | None
+    revoked_at: str | None
+    is_current: bool = False
 
 
 class TrustedDevicePageSchema(Schema):
@@ -201,3 +208,47 @@ class StaffAssistedRecoveryResponseSchema(Schema):
 class OtpResendResponseSchema(Schema):
     resent: bool
     detail: str
+
+
+class TwoFactorStatusSchema(Schema):
+    enabled: bool
+    required: bool
+    can_change: bool
+
+
+class TwoFactorChangeRequestSchema(Schema):
+    current_password: str
+    enabled: bool
+
+
+class TwoFactorChangeVerifyRequestSchema(Schema):
+    challenge_id: UUID
+    pending_nonce: str
+    otp: str
+
+
+class AssuranceChallengeSchema(Schema):
+    challenge_id: UUID
+    pending_nonce: str
+    expires_in: int
+    requires_verification: bool
+
+
+class AssuranceVerifyRequestSchema(Schema):
+    challenge_id: UUID
+    pending_nonce: str
+    otp: str
+
+
+class TwoFactorChangeResponseSchema(Schema):
+    enabled: bool
+    token_type: str | None = None
+    access_token: str | None = None
+    expires_in: int | None = None
+    refresh_token: str | None = None
+    refresh_expires_in: int | None = None
+    trusted_device: TrustedDeviceReceiptSchema | None = None
+
+
+class AssuranceVerifyResponseSchema(Schema):
+    verified: bool

@@ -1,15 +1,19 @@
 from typing import Optional, List
 from django.utils import timezone
-from apps.account_security.models import AccountRecoveryRequest, TwoStepChallenge, TrustedDevice
+from apps.account_security.models import (
+    AccountRecoveryRequest,
+    ApiSession,
+    ApiSessionStatusChoices,
+    TwoStepChallenge,
+    TrustedDevice,
+)
 from apps.account_security.tokens import hash_token, parse_recovery_token, RECOVERY_TOKEN_VERSION
 from apps.account_security.projections import (
     project_activity_log,
-    project_decode_state,
     project_session_row,
     project_trusted_device,
     project_user_activity_entry,
 )
-from django.contrib.sessions.models import Session
 from apps.audit.models import AuditLogEntry
 from apps.access_control.rules import is_active_nonlegacy_actor
 from apps.access_control.rules import is_it_admin
@@ -202,42 +206,30 @@ def get_user_activity_logs(user, days=90, action_filter=None):
     return [project_activity_log(log) for log in logs.order_by("-created_at", "-pk")]
 
 
-def get_active_sessions(user, current_session_key=None) -> dict:
-    """Retrieve bounded projections of the user's active Django sessions.
-
-    Returns ``{"sessions": [...], "decode": {...}}``.  An undecodable session
-    row is never silently dropped and never attributed to the account owner
-    (it cannot be safely decoded).  The undecodable count is kept server-side
-    and only surfaces as a safe ``decode`` diagnostic state.  Anonymous callers
-    receive ``not_authorized``.
-    """
+def get_active_sessions(user, current_session_id=None) -> dict:
+    """Retrieve bounded projections of real opaque-token family sessions."""
     if not is_active_nonlegacy_actor(user):
-        return {"sessions": [], "decode": project_decode_state(0, authorized=False)}
+        return {"sessions": []}
 
-    active_sessions = []
-    user_id_str = str(user.pk)
-    undecodable_count = 0
-
-    # Query non-expired sessions
-    sessions = Session.objects.filter(expire_date__gte=timezone.now()).order_by(
-        "-expire_date", "-session_key"
+    now = timezone.now()
+    ApiSession.objects.filter(
+        user=user,
+        status=ApiSessionStatusChoices.ACTIVE,
+        absolute_expires_at__lte=now,
+    ).update(
+        status=ApiSessionStatusChoices.EXPIRED,
+        updated_at=now,
     )
-    for session in sessions:
-        try:
-            session_data = session.get_decoded()
-        except Exception:
-            # A malformed/stale session cannot be attributed safely; surface a
-            # diagnostic state instead of silently omitting it.
-            undecodable_count += 1
-            continue
-        if str(session_data.get("_auth_user_id")) == user_id_str:
-            active_sessions.append(
-                project_session_row(session, session_data, current_session_key)
-            )
-
+    sessions = ApiSession.objects.filter(
+        user=user,
+        status=ApiSessionStatusChoices.ACTIVE,
+        absolute_expires_at__gt=now,
+    ).order_by("-last_activity_at", "-started_at", "-id")
     return {
-        "sessions": active_sessions,
-        "decode": project_decode_state(undecodable_count),
+        "sessions": [
+            project_session_row(session, current_session_id)
+            for session in sessions
+        ]
     }
 
 

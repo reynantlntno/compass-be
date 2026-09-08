@@ -22,6 +22,7 @@ SESSION_TRANSPORT_VALUE = "cookie"
 
 _ACCESS_COOKIE_BASE = "compass-access"
 _REFRESH_COOKIE_BASE = "compass-refresh"
+_TRUSTED_DEVICE_COOKIE_BASE = "compass-trusted-device"
 _MAX_COOKIE_VALUE_LENGTH = 512
 _EXPIRED_COOKIE_DATE = "Thu, 01 Jan 1970 00:00:00 GMT"
 
@@ -47,6 +48,12 @@ def session_cookie_names() -> SessionCookieNames:
         access=_ACCESS_COOKIE_BASE,
         refresh=_REFRESH_COOKIE_BASE,
     )
+
+
+def trusted_device_cookie_name() -> str:
+    if _uses_secure_prefixes():
+        return f"__Secure-{_TRUSTED_DEVICE_COOKIE_BASE}"
+    return _TRUSTED_DEVICE_COOKIE_BASE
 
 
 def session_transport_requested(request) -> bool:
@@ -92,6 +99,10 @@ def session_refresh_cookie(request) -> str | None:
     return request_cookie_value(request, session_cookie_names().refresh)
 
 
+def trusted_device_cookie(request) -> str | None:
+    return request_cookie_value(request, trusted_device_cookie_name())
+
+
 def session_response(data, *, status: int = 200) -> JsonResponse:
     response = JsonResponse(data, status=status)
     response["Cache-Control"] = "no-store"
@@ -115,6 +126,19 @@ def set_session_cookies(response, token_pair) -> None:
         httponly=True,
         samesite="Lax",
     )
+    trusted_token = getattr(token_pair, "trusted_device_token", None)
+    trusted_expiry = getattr(token_pair, "trusted_device_expires_at", None)
+    if trusted_token and trusted_expiry:
+        trusted_max_age = max(1, ceil((trusted_expiry - _now()).total_seconds()))
+        response.set_cookie(
+            trusted_device_cookie_name(),
+            trusted_token,
+            max_age=trusted_max_age,
+            path="/api/v1/auth/",
+            secure=secure,
+            httponly=True,
+            samesite="Lax",
+        )
     response.set_cookie(
         names.refresh,
         token_pair.refresh_token,
@@ -145,6 +169,22 @@ def clear_session_cookies(response) -> None:
             httponly=True,
             samesite="Lax",
         )
+
+
+def clear_trusted_device_cookie(response) -> None:
+    """Expire the remembered-device cookie explicitly, never on normal logout."""
+
+    secure = _uses_secure_prefixes()
+    response.set_cookie(
+        trusted_device_cookie_name(),
+        "",
+        max_age=0,
+        expires=_EXPIRED_COOKIE_DATE,
+        path="/api/v1/auth/",
+        secure=secure,
+        httponly=True,
+        samesite="Lax",
+    )
 
 
 def _now():

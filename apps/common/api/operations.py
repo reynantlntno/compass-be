@@ -135,6 +135,13 @@ def _register_account_security_operations() -> None:
         "me_activity_list",
         "me_sessions_list",
         "me_trusted_devices_list",
+        "me_two_factor_status",
+        "me_two_factor_change_request",
+        "me_two_factor_change_verify",
+        "me_two_factor_change_resend",
+        "me_assurance_challenge",
+        "me_assurance_verify",
+        "me_assurance_resend",
     ):
         API_OPERATION_SPECS[operation_id] = ApiOperationSpec(operation_id)
     for operation_id in (

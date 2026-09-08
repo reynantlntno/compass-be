@@ -28,12 +28,12 @@ def get_activity_page(
     )
 
 
-def get_session_activity(actor, *, current_session_key: str = "") -> dict:
-    return get_active_sessions(actor, current_session_key=current_session_key)
+def get_session_activity(actor, *, current_session_id: str = "") -> dict:
+    return get_active_sessions(actor, current_session_id=current_session_id)
 
 
-def get_session_page(actor, page: PageRequest, *, current_session_key: str = "") -> dict:
-    value = get_active_sessions(actor, current_session_key=current_session_key)
+def get_session_page(actor, page: PageRequest, *, current_session_id: str = "") -> dict:
+    value = get_active_sessions(actor, current_session_id=current_session_id)
     sessions = value.get("sessions", [])
     result = PageResult(
         items=tuple(sessions[page.offset:page.offset + page.page_size]),
@@ -41,15 +41,14 @@ def get_session_page(actor, page: PageRequest, *, current_session_key: str = "")
         page_size=page.page_size,
         total=len(sessions),
     ).as_dict()
-    result["decode"] = value.get("decode", {})
     return result
 
 
-def get_trusted_device_page(actor, page: PageRequest) -> PageResult[dict]:
+def get_trusted_device_page(actor, page: PageRequest, *, current_device_id=None) -> PageResult[dict]:
     queryset = get_user_trusted_devices(actor)
     return PageResult(
         items=tuple(
-            project_trusted_device(row)
+            project_trusted_device(row, current_device_id=current_device_id)
             for row in queryset[page.offset:page.offset + page.page_size]
         ),
         page=page.page,

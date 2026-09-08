@@ -13,6 +13,8 @@ from django.utils import timezone
 from apps.account_security.assurance import ASSURANCE_CONTEXT, ASSURANCE_POLICY_VERSION
 from apps.account_security.api_tokens import issue_token_pair
 from apps.account_security.models import (
+    ApiSession,
+    ApiSessionStatusChoices,
     ApiToken,
     ApiTokenStatusChoices,
     TrustedDevice,
@@ -30,8 +32,6 @@ from apps.account_security.selectors import get_active_sessions, get_user_activi
 from apps.common.contracts import PageRequest
 from apps.audit.models import AuditLogEntry
 from django.contrib.auth.models import AnonymousUser
-from django.contrib.sessions.backends.db import SessionStore
-from django.contrib.sessions.models import Session
 
 
 class ApiFoundationTests(TestCase):
@@ -397,23 +397,10 @@ class BearerDocsProtectionTests(TestCase):
             role=RoleChoices.IT_ADMIN,
             is_active=True,
         )
-        # Account-security policy controls are now stored in Governance;
-        # change the central target explicitly instead of relying on a
-        # deployment setting override.
-        from apps.governance.models import PolicyRecord
-
-        assurance_policy = PolicyRecord.objects.get(
-            key="security.account_security_controls",
-            target_type="governance.RuntimeSetting",
-            target_reference="ACCOUNT_SECURITY_ENFORCE_2FA_FOR_INTERNAL_USERS",
-            status="ACTIVE",
-        )
-        assurance_config = dict(assurance_policy.configuration_json)
-        assurance_config["value"] = False
-        assurance_policy.configuration_json = assurance_config
-        with self.captureOnCommitCallbacks(execute=True):
-            assurance_policy.save(update_fields=["configuration_json", "updated_at"])
-        pair = issue_token_pair(admin)
+        # The docs boundary requires an explicitly OTP-assured API session;
+        # it must not depend on a seeded Governance row being present in the
+        # test database.
+        pair = issue_token_pair(admin, assurance_verified=True)
 
         protected = bearer_it_admin_docs(lambda request: HttpResponse("schema"))
         response = protected(
@@ -657,34 +644,32 @@ class ActiveSessionsTests(TestCase):
         )
 
     def _create_session(self, user, device="Chrome on macOS", network="campus_network"):
-        store = SessionStore()
-        store["_auth_user_id"] = str(user.pk)
-        store["_compass_session_device_summary"] = device
-        store["_compass_session_network_class"] = network
-        store["_compass_session_started_at"] = timezone.now().isoformat()
-        store["_compass_session_last_activity_at"] = timezone.now().isoformat()
-        store.create()
-        return store
+        ip = "10.20.1.1" if network == "campus_network" else "8.8.8.8"
+        pair = issue_token_pair(user, ip=ip, user_agent=device)
+        session = ApiSession.objects.get(id=pair.session_id)
+        session.device_summary = device.lower()
+        session.network_class = network
+        session.save(update_fields=["device_summary", "network_class", "updated_at"])
+        return session
 
     def test_anonymous_returns_not_authorized(self):
         result = get_active_sessions(AnonymousUser())
         self.assertEqual(result["sessions"], [])
-        self.assertEqual(result["decode"]["state"], "not_authorized")
-        self.assertEqual(get_active_sessions(None)["decode"]["state"], "not_authorized")
+        self.assertNotIn("decode", result)
+        self.assertNotIn("decode", get_active_sessions(None))
 
     def test_returns_own_session_and_excludes_other_user(self):
         mine = self._create_session(self.user, network="campus_network")
         self._create_session(self.other, device="Firefox on Linux", network="public_network")
-        result = get_active_sessions(self.user, current_session_key=mine.session_key)
+        result = get_active_sessions(self.user, current_session_id=mine.id)
         self.assertEqual(len(result["sessions"]), 1)
-        self.assertEqual(result["decode"]["state"], "available")
         row = result["sessions"][0]
         self.assertTrue(row["is_current"])
         self.assertEqual(row["device"]["state"], "available")
         self.assertEqual(row["network"]["state"], "approximate")
         # raw session key and decoded internals never exposed
         dumped = json.dumps(result)
-        self.assertNotIn(mine.session_key, dumped)
+        self.assertNotIn(str(mine.id), dumped)
         self.assertNotIn("_auth_user_id", dumped)
 
     def test_inactive_and_legacy_accounts_cannot_read_own_sessions(self):
@@ -702,41 +687,15 @@ class ActiveSessionsTests(TestCase):
         )
         legacy.is_superuser = True
         legacy.save(update_fields=["is_superuser"])
-        self._create_session(inactive)
-        self._create_session(legacy)
         for actor in (inactive, legacy):
             result = get_active_sessions(actor)
             self.assertEqual(result["sessions"], [])
-            self.assertEqual(result["decode"]["state"], "not_authorized")
+            self.assertNotIn("decode", result)
 
-    def test_undecodable_session_not_silently_dropped(self):
-        mine = self._create_session(self.user)
-        garbage = Session.objects.create(
-            session_key="garbagekey00000001",
-            session_data="corrupt-data",
-            expire_date=timezone.now() + timedelta(days=1),
-        )
-        real = Session.objects.get(session_key=mine.session_key)
-        real_data = real.get_decoded()  # captured before patching get_decoded
-
-        def fake_decode(session_row):
-            # Force one decoder failure: Django normally swallows corrupt data
-            # and returns {}, but a genuine decode error must not drop the row
-            # silently or expose a count.
-            if session_row.session_key == garbage.session_key:
-                raise ValueError("corrupt session")
-            return real_data
-
-        with patch.object(Session, "get_decoded", fake_decode):
-            result = get_active_sessions(self.user)
-
-        self.assertEqual(result["decode"]["state"], "unavailable")
-        self.assertEqual(result["decode"]["reason_code"], "some_sessions_undecodable")
-        # the real, decodable session still appears
-        self.assertEqual(len(result["sessions"]), 1)
-        # the undecodable count stays server-side
-        self.assertNotIn("undecodable_count", json.dumps(result))
-        self.assertNotIn("count", json.dumps(result["decode"]))
+    def test_django_sessions_are_not_projected_as_api_sessions(self):
+        result = get_active_sessions(self.user)
+        self.assertEqual(result["sessions"], [])
+        self.assertNotIn("decode", json.dumps(result))
 
 
 @override_settings(CAMPUS_NETWORK_CIDRS=["10.20.0.0/16"])
@@ -919,10 +878,6 @@ class AccountSecurityApiParityTests(TestCase):
         self.assertEqual(security.json()["items"][0]["device"]["state"], "available")
 
     def test_sessions_and_trusted_devices_never_expose_raw_verifiers(self):
-        store = SessionStore()
-        store["_auth_user_id"] = str(self.user.pk)
-        store["_compass_session_device_summary"] = "Safari on macOS"
-        store.create()
         device = TrustedDevice.objects.create(
             user=self.user,
             device_hash=hash_token("raw-device-verifier"),
@@ -937,7 +892,6 @@ class AccountSecurityApiParityTests(TestCase):
         self.assertEqual(sessions.status_code, 200)
         self.assertEqual(devices.status_code, 200)
         dumped = json.dumps({"sessions": sessions.json(), "devices": devices.json()})
-        self.assertNotIn(store.session_key, dumped)
         self.assertNotIn("raw-device-verifier", dumped)
         self.assertNotIn("device_hash", dumped)
         self.assertEqual(
@@ -947,14 +901,11 @@ class AccountSecurityApiParityTests(TestCase):
                 "is_current",
                 "device",
                 "network",
-                "first_seen",
-                "last_activity",
-                "expire_date",
+                "started_at",
+                "last_activity_at",
+                "expires_at",
+                "authentication_method",
             },
-        )
-        self.assertEqual(
-            set(sessions.json()["decode"]),
-            {"state", "reason_code", "display_label"},
         )
         self.assertEqual(
             set(devices.json()["items"][0]),
@@ -965,6 +916,7 @@ class AccountSecurityApiParityTests(TestCase):
                 "trusted_until",
                 "last_used_at",
                 "revoked_at",
+                "is_current",
             },
         )
         self.assertEqual(devices.json()["items"][0]["id"], str(device.id))
@@ -978,19 +930,21 @@ class AccountSecurityApiParityTests(TestCase):
         self.assertEqual(sessions.status_code, 200)
         self.assertEqual(devices.status_code, 200)
         self.assertEqual(activity.json()["items"], [])
-        self.assertEqual(sessions.json()["items"], [])
+        self.assertEqual(len(sessions.json()["items"]), 1)
         self.assertEqual(devices.json()["items"], [])
-        self.assertEqual(sessions.json()["decode"]["state"], "available")
-        for payload in (activity.json(), sessions.json(), devices.json()):
+        for payload, expected_total in (
+            (activity.json(), 0),
+            (sessions.json(), 1),
+            (devices.json(), 0),
+        ):
             self.assertEqual(payload["page"], 1)
             self.assertEqual(payload["page_size"], 25)
-            self.assertEqual(payload["total"], 0)
+            self.assertEqual(payload["total"], expected_total)
 
     def test_session_and_device_mutations_are_owner_bound_and_idempotent(self):
-        store = SessionStore()
-        store["_auth_user_id"] = str(self.user.pk)
-        store.create()
-        action_token = hash_identifier(f"account-session:{store.session_key}")
+        second_session_id = issue_token_pair(self.user).session_id
+        action_token = hash_identifier(f"account-session:{second_session_id}")
+        from apps.account_security.tokens import get_session_action_token
         response = self.client.post(
             f"/api/v1/me/sessions/{action_token}/revoke/",
             **self._headers(key="session-revoke-1"),
@@ -1004,7 +958,10 @@ class AccountSecurityApiParityTests(TestCase):
         self.assertEqual(response.json(), {"revoked": True})
         self.assertEqual(replay.status_code, 200)
         self.assertEqual(replay.json(), {"revoked": True})
-        self.assertFalse(Session.objects.filter(session_key=store.session_key).exists())
+        self.assertEqual(
+            ApiSession.objects.get(id=second_session_id).status,
+            ApiSessionStatusChoices.REVOKED,
+        )
 
     def test_password_change_rotates_security_state_and_rejects_raw_command_repr(self):
         command = PasswordChangeCommand(

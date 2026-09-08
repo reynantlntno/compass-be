@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from uuid import UUID
 
 from django.http import HttpResponse
@@ -16,17 +17,21 @@ from apps.account_security.api_tokens import (
     begin_password_login,
     complete_password_login,
     revoke_form_invitation_family,
+    revoke_session_for_raw_credential,
     rotate_refresh_token,
 )
-from apps.account_security.assurance import ASSURANCE_SESSION_KEY
 from apps.account_security.network import get_client_ip_from_headers
+from apps.account_security.api_auth import extract_bearer_token
 from apps.account_security.session_cookies import (
     authorization_header,
     clear_session_cookies,
+    clear_trusted_device_cookie,
+    session_access_cookie,
     session_refresh_cookie,
     session_response,
     session_transport_requested,
     set_session_cookies,
+    trusted_device_cookie,
 )
 from apps.common.contracts import RequestMetadata
 from apps.account_security.schemas import (
@@ -37,6 +42,7 @@ from apps.account_security.schemas import (
     LoginChallengeSchema,
     LoginRequestSchema,
     LoginVerifyRequestSchema,
+    LogoutRequestSchema,
     MeSchema,
     RefreshTokenRequestSchema,
     TokenPairSchema,
@@ -56,6 +62,13 @@ from apps.account_security.schemas import (
     RevocationResponseSchema,
     SessionPageSchema,
     TrustedDevicePageSchema,
+    TwoFactorStatusSchema,
+    TwoFactorChangeRequestSchema,
+    TwoFactorChangeVerifyRequestSchema,
+    AssuranceChallengeSchema,
+    AssuranceVerifyRequestSchema,
+    AssuranceVerifyResponseSchema,
+    TwoFactorChangeResponseSchema,
 )
 from apps.common.exceptions import (
     CompassError,
@@ -126,10 +139,13 @@ def _reject_conflicting_session_credentials(request) -> None:
         raise InvalidCredentialsError()
 
 
-def _auth_success_response(request, pair):
+def _auth_success_response(request, pair, *, receipt_data=None):
     if not session_transport_requested(request):
-        return pair.as_dict()
-    response = session_response({"authenticated": True})
+        result = pair.as_dict()
+        if receipt_data:
+            result.update(receipt_data)
+        return result
+    response = session_response({"authenticated": True, **(receipt_data or {})})
     set_session_cookies(response, pair)
     return response
 
@@ -195,12 +211,6 @@ def staff_recovery_request(request, payload: StaffAssistedRecoveryRequestSchema)
         reason_category=payload.reason_category,
         email_ownership_attested=payload.email_ownership_attested,
     )
-    assurance_marker = getattr(request, "session", None)
-    assurance_marker = (
-        assurance_marker.get(ASSURANCE_SESSION_KEY)
-        if assurance_marker is not None
-        else None
-    )
     assurance_token = getattr(getattr(request, "auth", None), "token", None)
     safe_result = {
         "accepted": True,
@@ -213,7 +223,6 @@ def staff_recovery_request(request, payload: StaffAssistedRecoveryRequestSchema)
             command=command,
             ip=context.ip_address,
             user_agent=context.user_agent,
-            assurance_marker=assurance_marker,
             assurance_token=assurance_token,
         )
         return ApiMutationOutcome(
@@ -275,8 +284,18 @@ def student_activation(request, payload: StudentActivationRequestSchema):
 )
 def login(request, payload: LoginRequestSchema):
     _reject_conflicting_session_credentials(request)
+    trusted_token = payload.trusted_device_token
+    if session_transport_requested(request):
+        if trusted_token is not None:
+            raise InvalidCredentialsError()
+        trusted_token = trusted_device_cookie(request)
     try:
-        outcome = begin_password_login(payload.email, payload.password, _request_context(request))
+        outcome = begin_password_login(
+            payload.email,
+            payload.password,
+            _request_context(request),
+            trusted_device_token=trusted_token,
+        )
     except ApiTokenError as error:
         _raise_auth_error(error, default_detail="Invalid credentials.")
     if hasattr(outcome, "pending_nonce"):
@@ -300,6 +319,7 @@ def login_verify(request, payload: LoginVerifyRequestSchema):
             payload.pending_nonce,
             payload.otp,
             _request_context(request),
+            trust_device=payload.trust_device,
         )
     except ApiTokenError as error:
         _raise_auth_error(error, default_detail="Verification could not be completed.")
@@ -333,21 +353,37 @@ def token_refresh(request, payload: RefreshTokenRequestSchema):
 
 @router.post(
     "/logout/",
-    response={204: None, 401: ErrorSchema},
+    auth=None,
+    response={204: None},
     operation_id="auth_logout",
 )
 def logout(request):
-    principal = request.auth
-    revoke_form_invitation_family(
-        principal.token.family_id,
-        actor_user=principal.user,
-        ip=_request_context(request).ip_address,
-        user_agent=_request_context(request).user_agent,
-        reason="logout",
-    )
-    response = HttpResponse(status=204)
+    context = _request_context(request)
+    refresh_body = None
+    if not session_transport_requested(request) and getattr(request, "body", b""):
+        try:
+            parsed = json.loads(request.body.decode("utf-8"))
+            if isinstance(parsed, dict):
+                refresh_body = parsed.get("refresh_token")
+        except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+            refresh_body = None
+    credentials = []
     if session_transport_requested(request):
-        clear_session_cookies(response)
+        credentials.extend([session_access_cookie(request), session_refresh_cookie(request)])
+    else:
+        credentials.extend([extract_bearer_token(request), refresh_body])
+    for raw_credential in credentials:
+        revoke_session_for_raw_credential(
+            raw_credential,
+            ip=context.ip_address,
+            user_agent=context.user_agent,
+            reason="logout",
+        )
+    response = HttpResponse(status=204)
+    # Logout is deliberately idempotent at the transport boundary.  Clear
+    # both cookie credentials even when the caller used bearer auth or sent
+    # an already-expired/revoked credential.
+    clear_session_cookies(response)
     return response
 
 
@@ -365,6 +401,149 @@ def me(request):
         "last_name": user.last_name,
         "role": user.role,
     }
+
+
+@me_router.get(
+    "/two-factor/",
+    response={200: TwoFactorStatusSchema, 403: ErrorSchema},
+    operation_id="me_two_factor_status",
+)
+def two_factor_status(request):
+    actor = _active_actor(request)
+    prepare_api_operation(request, "me_two_factor_status")
+    from apps.account_security.two_factor import two_factor_status as get_status
+
+    return get_status(actor)
+
+
+@me_router.post(
+    "/two-factor/change/request/",
+    response={200: AssuranceChallengeSchema, 403: ErrorSchema, 422: ErrorSchema},
+    operation_id="me_two_factor_change_request",
+)
+def two_factor_change_request(request, payload: TwoFactorChangeRequestSchema):
+    actor = _active_actor(request)
+    prepare_api_operation(request, "me_two_factor_change_request")
+    context = _request_context(request)
+    from apps.account_security.two_factor import request_student_two_factor_change
+
+    return request_student_two_factor_change(
+        actor,
+        current_password=payload.current_password,
+        enabled=payload.enabled,
+        ip=context.ip_address,
+        user_agent=context.user_agent,
+    )
+
+
+@me_router.post(
+    "/two-factor/change/verify/",
+    response={
+        200: TokenPairSchema | AuthSessionReceiptSchema | TwoFactorChangeResponseSchema,
+        401: ErrorSchema,
+        403: ErrorSchema,
+    },
+    operation_id="me_two_factor_change_verify",
+)
+def two_factor_change_verify(request, payload: TwoFactorChangeVerifyRequestSchema):
+    actor = _active_actor(request)
+    prepare_api_operation(request, "me_two_factor_change_verify")
+    context = _request_context(request)
+    from apps.account_security.two_factor import verify_student_two_factor_change
+
+    enabled, pair = verify_student_two_factor_change(
+        actor,
+        challenge_id=payload.challenge_id,
+        pending_nonce=payload.pending_nonce,
+        otp=payload.otp,
+        ip=context.ip_address,
+        user_agent=context.user_agent,
+    )
+    response = _auth_success_response(request, pair, receipt_data={"enabled": enabled})
+    if session_transport_requested(request):
+        clear_trusted_device_cookie(response)
+    return response
+
+
+@me_router.post(
+    "/two-factor/change/resend/",
+    response={200: OtpResendResponseSchema, 401: ErrorSchema},
+    operation_id="me_two_factor_change_resend",
+)
+def two_factor_change_resend(request, payload: OtpResendRequestSchema):
+    actor = _active_actor(request)
+    prepare_api_operation(request, "me_two_factor_change_resend")
+    context = _request_context(request)
+    from apps.account_security.two_factor import resend_student_two_factor_change
+
+    return resend_student_two_factor_change(
+        actor,
+        challenge_id=payload.challenge_id,
+        pending_nonce=payload.pending_nonce,
+        ip=context.ip_address,
+        user_agent=context.user_agent,
+    )
+
+
+@me_router.post(
+    "/assurance/challenge/",
+    response={200: AssuranceChallengeSchema, 403: ErrorSchema, 422: ErrorSchema},
+    operation_id="me_assurance_challenge",
+)
+def assurance_challenge(request):
+    actor = _active_actor(request)
+    prepare_api_operation(request, "me_assurance_challenge")
+    context = _request_context(request)
+    from apps.account_security.two_factor import request_assurance_challenge
+
+    return request_assurance_challenge(
+        actor,
+        session_id=request.auth.token.session_id or request.auth.token.family_id,
+        ip=context.ip_address,
+        user_agent=context.user_agent,
+    )
+
+
+@me_router.post(
+    "/assurance/verify/",
+    response={200: AssuranceVerifyResponseSchema, 401: ErrorSchema},
+    operation_id="me_assurance_verify",
+)
+def assurance_verify(request, payload: AssuranceVerifyRequestSchema):
+    actor = _active_actor(request)
+    prepare_api_operation(request, "me_assurance_verify")
+    context = _request_context(request)
+    from apps.account_security.two_factor import verify_assurance_challenge
+
+    return verify_assurance_challenge(
+        actor,
+        session_id=request.auth.token.session_id or request.auth.token.family_id,
+        challenge_id=payload.challenge_id,
+        pending_nonce=payload.pending_nonce,
+        otp=payload.otp,
+        ip=context.ip_address,
+        user_agent=context.user_agent,
+    )
+
+
+@me_router.post(
+    "/assurance/resend/",
+    response={200: OtpResendResponseSchema, 401: ErrorSchema},
+    operation_id="me_assurance_resend",
+)
+def assurance_resend(request, payload: OtpResendRequestSchema):
+    actor = _active_actor(request)
+    prepare_api_operation(request, "me_assurance_resend")
+    context = _request_context(request)
+    from apps.account_security.two_factor import resend_assurance_challenge
+
+    return resend_assurance_challenge(
+        actor,
+        challenge_id=payload.challenge_id,
+        pending_nonce=payload.pending_nonce,
+        ip=context.ip_address,
+        user_agent=context.user_agent,
+    )
 
 
 def _active_actor(request):
@@ -413,7 +592,7 @@ def sessions(request, page: PageQuery, page_size: PageSizeQuery):
     return get_session_page(
         actor,
         _page(page, page_size),
-        current_session_key=_request_context(request).session_key,
+        current_session_id=str(request.auth.token.session_id or request.auth.token.family_id),
     )
 
 
@@ -432,7 +611,7 @@ def revoke_other_sessions(request):
     def operation():
         from apps.account_security.services import terminate_other_sessions
         count = terminate_other_sessions(
-            context.session_key,
+            str(request.auth.token.session_id or request.auth.token.family_id),
             actor,
             ip=context.ip_address,
             user_agent=context.user_agent,
@@ -474,7 +653,7 @@ def revoke_session(request, session_token: str):
             actor,
             ip=context.ip_address,
             user_agent=context.user_agent,
-            current_session_key=context.session_key,
+            current_session_key=str(request.auth.token.session_id or request.auth.token.family_id),
         )
         if not revoked:
             from apps.common.exceptions import NotFoundError
@@ -503,7 +682,12 @@ def revoke_session(request, session_token: str):
 def trusted_devices(request, page: PageQuery, page_size: PageSizeQuery):
     actor = _active_actor(request)
     prepare_api_operation(request, "me_trusted_devices_list")
-    return get_trusted_device_page(actor, _page(page, page_size)).as_dict()
+    current_device_id = getattr(request.auth.token.session, "trusted_device_id", None)
+    return get_trusted_device_page(
+        actor,
+        _page(page, page_size),
+        current_device_id=current_device_id,
+    ).as_dict()
 
 
 @me_router.post(

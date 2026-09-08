@@ -147,7 +147,8 @@ class TwoStepChallenge(TimestampedModel):
             ("login", "Login"),
             ("recovery", "Recovery"),
             ("activation", "Activation"),
-            ("sensitive_action", "Sensitive Action")
+            ("sensitive_action", "Sensitive Action"),
+            ("two_factor_change", "Two-factor change"),
         ]
     )
     otp_hash = models.CharField(max_length=64, db_index=True)
@@ -219,6 +220,7 @@ class TrustedDevice(TimestampedModel):
     assurance_policy_version = models.CharField(max_length=50, blank=True, default="")
     assurance_context = models.CharField(max_length=50, blank=True, default="")
     request_ip_hash = models.CharField(max_length=64, null=True, blank=True)
+    network_class = models.CharField(max_length=32, default="unknown", blank=True)
     metadata_json = models.JSONField(default=dict, blank=True)
 
     class Meta:
@@ -230,6 +232,94 @@ class TrustedDevice(TimestampedModel):
 
     def __str__(self):
         return f"Trusted Device {self.id}"
+
+
+class StudentTwoFactorEnrollment(TimestampedModel):
+    """Self-service two-factor enrollment state for student accounts.
+
+    Staff assurance remains role-governed.  Keeping student enrollment in
+    account-security makes the optional student policy explicit and prevents a
+    missing row from being treated as an accidental enrollment.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="student_two_factor_enrollment",
+    )
+    enabled = models.BooleanField(default=False)
+    enabled_at = models.DateTimeField(null=True, blank=True)
+    disabled_at = models.DateTimeField(null=True, blank=True)
+    last_changed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "student two-factor enrollment"
+        verbose_name_plural = "student two-factor enrollments"
+
+    def __str__(self):
+        return f"Student 2FA enrollment for {self.user_id}"
+
+
+class ApiSessionStatusChoices(models.TextChoices):
+    ACTIVE = "ACTIVE", "Active"
+    REVOKED = "REVOKED", "Revoked"
+    EXPIRED = "EXPIRED", "Expired"
+
+
+class ApiSessionAuthenticationMethodChoices(models.TextChoices):
+    PASSWORD = "password", "Password"
+    OTP = "otp", "OTP"
+    TRUSTED_DEVICE = "trusted_device", "Trusted device"
+    MIGRATED = "migrated", "Migrated"
+
+
+class ApiSession(TimestampedModel):
+    """One opaque-token family and its bounded security provenance."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="api_sessions",
+    )
+    status = models.CharField(
+        max_length=16,
+        choices=ApiSessionStatusChoices.choices,
+        default=ApiSessionStatusChoices.ACTIVE,
+    )
+    device_summary = models.CharField(max_length=120, default="unknown device")
+    network_class = models.CharField(max_length=32, default="unknown")
+    authentication_method = models.CharField(
+        max_length=24,
+        choices=ApiSessionAuthenticationMethodChoices.choices,
+        default=ApiSessionAuthenticationMethodChoices.PASSWORD,
+    )
+    security_stamp = models.UUIDField()
+    trusted_device = models.ForeignKey(
+        "account_security.TrustedDevice",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="api_sessions",
+    )
+    started_at = models.DateTimeField(default=timezone.now)
+    last_activity_at = models.DateTimeField(default=timezone.now)
+    absolute_expires_at = models.DateTimeField()
+    last_otp_verified_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_reason = models.CharField(max_length=100, blank=True, null=True)
+
+    class Meta:
+        verbose_name = "API session"
+        verbose_name_plural = "API sessions"
+        indexes = [
+            models.Index(fields=["user", "status", "absolute_expires_at"]),
+            models.Index(fields=["status", "absolute_expires_at"]),
+        ]
+
+    def __str__(self):
+        return f"API session {self.id} ({self.status.lower()})"
 
 
 class ApiTokenTypeChoices(models.TextChoices):
@@ -257,6 +347,13 @@ class ApiToken(TimestampedModel):
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="api_tokens",
+    )
+    session = models.ForeignKey(
+        "account_security.ApiSession",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="tokens",
     )
     family_id = models.UUIDField(default=uuid.uuid4, db_index=True)
     token_hash = models.CharField(max_length=64, unique=True)
