@@ -6,7 +6,7 @@ from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
-from ninja import Field, Router, Schema
+from ninja import Field, Query, Router, Schema
 
 from apps.account_security.network import get_client_ip_from_headers
 from apps.access_control.authority import has_fixed_capability
@@ -703,8 +703,13 @@ def list_visible_resources(request, page: PageQuery, page_size: PageSizeQuery):
     exclude_unset=True,
     operation_id="content_workspace",
 )
-def workspace(request, page: PageQuery, page_size: PageSizeQuery):
-    status_key = str(request.GET.get("status", "all") or "all")
+def workspace(
+    request,
+    page: PageQuery,
+    page_size: PageSizeQuery,
+    status: str = Query(default="all"),
+):
+    status_key = status or "all"
     return content_workspace(_actor(request), status_key, _page(page, page_size)).as_dict()
 
 

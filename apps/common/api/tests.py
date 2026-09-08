@@ -501,6 +501,144 @@ class ApiResponseDocumentationTests(SimpleTestCase):
             if isinstance(operation, dict) and operation.get("operationId")
         }
 
+    def test_every_operation_exposes_the_shared_error_contract(self):
+        from apps.common.api.openapi import API_ERROR_SCHEMA_REF, COMMON_ERROR_STATUS_CODES
+        from config.api.v1 import api_v1
+
+        document = api_v1.get_openapi_schema()
+        operations = self._operations(document)
+        self.assertIn("ApiErrorSchema", document["components"]["schemas"])
+        self.assertEqual(
+            set(document["components"]["schemas"]["ApiErrorSchema"]["properties"]),
+            {"detail", "code", "request_id", "error_id", "field_errors"},
+        )
+        logout_responses = operations["auth_logout"]["responses"]
+        logout_204 = logout_responses.get(204) or logout_responses.get("204")
+        self.assertEqual(logout_204, {"description": "No Content"})
+
+        for operation_id, operation in operations.items():
+            with self.subTest(operation_id=operation_id):
+                responses = operation["responses"]
+                for status_code in COMMON_ERROR_STATUS_CODES:
+                    response = responses.get(status_code) or responses.get(str(status_code))
+                    self.assertIsNotNone(response)
+                    self.assertEqual(
+                        response["content"]["application/json"]["schema"],
+                        {"$ref": API_ERROR_SCHEMA_REF},
+                    )
+
+    def test_manually_read_query_filters_are_explicit_and_typed(self):
+        from config.api.v1 import api_v1
+
+        document = api_v1.get_openapi_schema()
+        operations = self._operations(document)
+        expected = {
+            "assessments_list": {
+                "status": ("string", ""),
+                "category": ("string", ""),
+            },
+            "me_activity_list": {"category": ("string", "all")},
+            "content_workspace": {"status": ("string", "all")},
+            "notifications_list": {"status": ("string", None)},
+            "notifications_delivery_list": {
+                "status": ("string", None),
+                "delivery_state": ("string", None),
+                "template_key": ("string", None),
+            },
+            "system_errors_list": {
+                "unresolved_only": ("boolean", False),
+                "category": ("string", None),
+            },
+            "privacy_notice_view": {
+                "purpose_workflow": ("string", ""),
+                "locale": ("string", "en"),
+            },
+            "privacy_acceptance_list": {"purpose_workflow": ("string", "")},
+            "organizations_academic_term_rollover_preview": {
+                "prior_term_id": ("integer", None),
+            },
+            "imports_preview": {"editor": ("boolean", False)},
+        }
+
+        def schema_types(schema):
+            if "type" in schema:
+                return {schema["type"]}
+            return {
+                branch.get("type")
+                for branch in schema.get("anyOf", [])
+                if branch.get("type")
+            }
+
+        for operation_id, fields in expected.items():
+            with self.subTest(operation_id=operation_id):
+                parameters = {
+                    parameter["name"]: parameter
+                    for parameter in operations[operation_id]["parameters"]
+                    if parameter.get("in") == "query"
+                }
+                for name, (expected_type, expected_default) in fields.items():
+                    with self.subTest(parameter=name):
+                        parameter = parameters[name]
+                        self.assertFalse(parameter["required"])
+                        self.assertIn(expected_type, schema_types(parameter["schema"]))
+                        self.assertEqual(parameter["schema"].get("default"), expected_default)
+
+    def test_file_upload_operations_are_explicit_multipart_contracts(self):
+        from config.api.v1 import api_v1
+
+        document = api_v1.get_openapi_schema()
+        operations = self._operations(document)
+        expected = {
+            "imports_create": {"file", "source_name", "academic_year"},
+            "imports_replace": {"file", "source_name", "academic_year"},
+            "assessments_file_attach": {"file"},
+            "organizations_brand_asset_create": {
+                "file", "institution_id", "office_id", "asset_type", "semantic_role",
+                "owner_type", "placement", "display_order", "alt_text", "usage_context",
+                "background_variant", "version_label", "source_note", "effective_from",
+                "effective_until", "expected_updated_at",
+            },
+            "organizations_brand_asset_update": {
+                "file", "institution_id", "office_id", "asset_type", "semantic_role",
+                "owner_type", "placement", "display_order", "alt_text", "usage_context",
+                "background_variant", "version_label", "source_note", "effective_from",
+                "effective_until", "expected_updated_at",
+            },
+        }
+
+        def resolve(schema):
+            while "$ref" in schema:
+                schema = document["components"]["schemas"][schema["$ref"].rsplit("/", 1)[-1]]
+            return schema
+
+        def binary_schema(schema):
+            schema = resolve(schema)
+            if schema.get("format") == "binary":
+                return schema
+            for branch in schema.get("anyOf", []):
+                if branch.get("format") == "binary":
+                    return branch
+            return {}
+
+        for operation_id, expected_fields in expected.items():
+            with self.subTest(operation_id=operation_id):
+                request_body = operations[operation_id]["requestBody"]
+                content = request_body["content"]
+                self.assertEqual(set(content), {"multipart/form-data"})
+                self.assertNotIn("application/json", content)
+                schema = resolve(content["multipart/form-data"]["schema"])
+                self.assertTrue(expected_fields.issubset(schema["properties"]))
+                file_schema = binary_schema(schema["properties"]["file"])
+                self.assertEqual(file_schema.get("type"), "string")
+                self.assertEqual(file_schema.get("format"), "binary")
+                required = set(schema.get("required", []))
+                if operation_id == "organizations_brand_asset_update":
+                    self.assertNotIn("file", required)
+                else:
+                    self.assertIn("file", required)
+                if operation_id in {"imports_create", "imports_replace"}:
+                    self.assertTrue({"source_name", "academic_year"}.issubset(required))
+
     def test_all_paginated_operations_expose_the_shared_contract(self):
         from config.api.v1 import api_v1
 

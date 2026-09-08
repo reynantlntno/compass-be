@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import datetime
 
-from ninja import Router, Schema
+from ninja import File, Query, Router, Schema, UploadedFile
 
 from apps.assessments.choices import AssessmentInterpretationVisibility
 from apps.assessments.commands import (
@@ -253,13 +253,19 @@ def student_summary_detail(request, record_id: int):
 
 
 @router.get("/", response=AssessmentPageSchema, operation_id="assessments_list")
-def list_assessments(request, page: PageQuery, page_size: PageSizeQuery):
+def list_assessments(
+    request,
+    page: PageQuery,
+    page_size: PageSizeQuery,
+    status: str = Query(default=""),
+    category: str = Query(default=""),
+):
     prepare_api_operation(request, "assessments_list")
     return queries.assessment_page(
         _actor(request),
         _page(page, page_size),
-        status=str(request.GET.get("status", "") or ""),
-        category=str(request.GET.get("category", "") or ""),
+        status=status or "",
+        category=category or "",
     )
 
 
@@ -435,11 +441,9 @@ def archive(request, record_id: int, payload: ReasonSchema = ReasonSchema()):
 
 
 @router.post("/{record_id}/file/attach/", response=AssessmentStaffProjectionSchema, operation_id="assessments_file_attach")
-def attach_file(request, record_id: int):
+def attach_file(request, record_id: int, file: UploadedFile = File(...)):
     prepared = prepare_api_operation(request, "assessments_file_attach")
-    upload = (getattr(request, "FILES", {}) or {}).get("file")
-    if upload is None:
-        raise ValidationError(field_errors={"file": ["A protected assessment file is required."]})
+    upload = file
     try:
         validate_assessment_upload(upload)
     except SecurityError as exc:

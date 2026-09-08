@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 
 from django.core.files.storage import default_storage
 from django.utils.dateparse import parse_date, parse_datetime
-from ninja import Field, Router, Schema
+from ninja import File, Field, Form, Query, Router, Schema, UploadedFile
 
 from apps.common.api.idempotency import ApiMutationOutcome, run_api_mutation
 from apps.common.api.operations import prepare_api_operation
@@ -626,8 +626,7 @@ def _public_page(value):
     return value
 
 
-def _store_asset_upload(request):
-    upload = (getattr(request, "FILES", {}) or {}).get("file")
+def _store_asset_upload(upload):
     if upload is None:
         raise ValidationError(field_errors={"file": ["An image file is required."]})
     size = int(getattr(upload, "size", 0) or 0)
@@ -914,8 +913,12 @@ def document_template(request, template_id: int):
 
 
 @router.get("/governance/academic-terms/{term_id}/rollover-preview/", response=AcademicTermRolloverPreviewSchema, exclude_unset=True, operation_id="organizations_academic_term_rollover_preview")
-def academic_term_rollover_preview(request, term_id: int):
-    payload = RolloverSchema(prior_term_id=request.GET.get("prior_term_id"))
+def academic_term_rollover_preview(
+    request,
+    term_id: int,
+    prior_term_id: int | None = Query(default=None),
+):
+    payload = RolloverSchema(prior_term_id=prior_term_id)
     return build_term_rollover_preview(
         _actor(request),
         RolloverPreviewCommand(term_id=str(term_id), prior_term_id=payload.prior_term_id),
@@ -993,13 +996,17 @@ def office_archive(request, office_id: int, payload: LifecycleSchema):
 
 
 @router.post("/governance/brand-assets/", response=BrandAssetProjectionSchema, exclude_unset=True, operation_id="organizations_brand_asset_create")
-def brand_asset_create(request, payload: BrandAssetSchema):
+def brand_asset_create(
+    request,
+    payload: Form[BrandAssetSchema],
+    file: UploadedFile = File(...),
+):
     operation_id = "organizations_brand_asset_create"
     prepared = prepare_api_operation(request, operation_id)
     safe_payload = {**payload.dict(), "upload": True}
 
     def operation():
-        receipt = _store_asset_upload(request)
+        receipt = _store_asset_upload(file)
         try:
             data = payload.dict()
             data["upload_receipt"] = receipt
@@ -1024,14 +1031,19 @@ def brand_asset_create(request, payload: BrandAssetSchema):
 
 
 @router.post("/governance/brand-assets/{asset_id}/update/", response=BrandAssetProjectionSchema, exclude_unset=True, operation_id="organizations_brand_asset_update")
-def brand_asset_update(request, asset_id: int, payload: BrandAssetSchema):
+def brand_asset_update(
+    request,
+    asset_id: int,
+    payload: Form[BrandAssetSchema],
+    file: UploadedFile | None = File(default=None),
+):
     operation_id = "organizations_brand_asset_update"
     prepared = prepare_api_operation(request, operation_id)
-    has_upload = bool((getattr(request, "FILES", {}) or {}).get("file"))
+    has_upload = file is not None
     safe_payload = {"id": asset_id, **payload.dict(), "upload": has_upload}
 
     def operation():
-        receipt = _store_asset_upload(request) if has_upload else None
+        receipt = _store_asset_upload(file) if has_upload else None
         try:
             data = payload.dict()
             data["upload_receipt"] = receipt

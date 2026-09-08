@@ -1,8 +1,6 @@
 """Canonical Django Ninja API v1 assembly."""
 
 from django.conf import settings
-from ninja import NinjaAPI
-
 from apps.account_security.api import me_router, router as auth_router
 from apps.account_security.api_auth import CompassBearerAuthentication
 from apps.security.api import router as files_router
@@ -36,6 +34,7 @@ from apps.common.api.errors import (
     handle_framework_error,
     handle_unexpected_error,
 )
+from apps.common.api.openapi import CompassNinjaAPI
 from apps.common.exceptions import CompassError
 from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -49,7 +48,7 @@ _development_docs_enabled = str(
 ).strip().lower() in {"development", "testing"}
 
 
-api_v1 = NinjaAPI(
+api_v1 = CompassNinjaAPI(
     title="COMPASS API",
     version="1.0.0",
     description="The canonical backend API for COMPASS clients.",

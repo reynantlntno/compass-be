@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime
 
-from ninja import Router, Schema
+from ninja import File, Form, Query, Router, Schema, UploadedFile
 
 from apps.common.api.idempotency import ApiMutationOutcome, run_api_mutation
 from apps.common.api.operations import prepare_api_operation
@@ -346,16 +346,17 @@ def revoke_invitation(request, invitation_id: int, payload: InvitationReasonSche
 
 
 @router.post("/", response=ImportBatchSchema, exclude_unset=True, operation_id="imports_create")
-def create_batch(request):
+def create_batch(
+    request,
+    file: UploadedFile = File(...),
+    source_name: str = Form(...),
+    academic_year: str = Form(...),
+):
     actor = _actor(request)
     prepared = prepare_api_operation(request, "imports_create")
-    upload = request.FILES.get("file")
-    if upload is None:
-        raise ValidationError(field_errors={"file": ["A CSV file is required."]})
+    upload = file
     if int(getattr(upload, "size", 0) or 0) > _max_upload_bytes():
         raise ValidationError("Upload exceeds the permitted size.")
-    source_name = str(request.POST.get("source_name", "") or "")
-    academic_year = str(request.POST.get("academic_year", "") or "")
     raw = upload.read()
     command = ImportBatchCreateCommand(
         source_name=source_name,
@@ -392,9 +393,14 @@ def batch_detail(request, batch_id: int):
 
 
 @router.get("/{batch_id}/preview/", response=ImportRowPageSchema, exclude_unset=True, operation_id="imports_preview")
-def preview(request, batch_id: int, page: PageQuery, page_size: PageSizeQuery):
+def preview(
+    request,
+    batch_id: int,
+    page: PageQuery,
+    page_size: PageSizeQuery,
+    editor: bool = Query(default=False),
+):
     actor = _actor(request)
-    editor = str(request.GET.get("editor", "")).lower() in {"1", "true", "yes"}
     if editor and not can_edit_student_onboarding(actor):
         raise PermissionDeniedError()
     return queries.row_page(actor, batch_id, _page(page, page_size), editor=editor)
@@ -451,21 +457,26 @@ def _row_mutation_outcome(actor, batch_id, row_id, operation, *, editor=False):
 
 
 @router.post("/{batch_id}/replace/", response=ImportBatchSchema, exclude_unset=True, operation_id="imports_replace")
-def replace_batch(request, batch_id: int):
+def replace_batch(
+    request,
+    batch_id: int,
+    file: UploadedFile = File(...),
+    source_name: str = Form(...),
+    academic_year: str = Form(...),
+    expected_updated_at: str | None = Form(default=None),
+):
     actor = _actor(request)
     prepared = prepare_api_operation(request, "imports_replace")
-    upload = request.FILES.get("file")
-    if upload is None:
-        raise ValidationError(field_errors={"file": ["A replacement CSV file is required."]})
+    upload = file
     if int(getattr(upload, "size", 0) or 0) > _max_upload_bytes():
         raise ValidationError("Upload exceeds the permitted size.")
     raw = upload.read()
     command = ImportBatchReplacementCommand(
-        source_name=str(request.POST.get("source_name", "") or ""),
-        academic_year=str(request.POST.get("academic_year", "") or ""),
+        source_name=source_name,
+        academic_year=academic_year,
         filename=str(getattr(upload, "name", "") or ""),
         content_type=str(getattr(upload, "content_type", "") or ""),
-        expected_updated_at=str(request.POST.get("expected_updated_at", "") or "") or None,
+        expected_updated_at=expected_updated_at or None,
     )
     return _run(
         request,

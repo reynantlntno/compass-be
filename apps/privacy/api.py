@@ -10,7 +10,7 @@ from dataclasses import asdict
 from datetime import datetime
 from uuid import UUID
 
-from ninja import Field, Router, Schema
+from ninja import Field, Query, Router, Schema
 
 from apps.account_security.api_auth import authenticate_bearer_request
 from apps.common.api.idempotency import ApiMutationOutcome, run_api_mutation
@@ -397,10 +397,15 @@ def _safe_incident_payload(command):
     exclude_unset=True,
     operation_id="privacy_notice_view",
 )
-def notice_view(request, notice_identifier: str):
+def notice_view(
+    request,
+    notice_identifier: str,
+    purpose_workflow: str = Query(default=""),
+    locale: str = Query(default="en"),
+):
     prepare_api_operation(request, "privacy_notice_view")
-    purpose = str(request.GET.get("purpose_workflow", "") or "").strip()
-    locale = str(request.GET.get("locale", "en") or "en").strip()
+    purpose = (purpose_workflow or "").strip()
+    locale = (locale or "en").strip()
     notice = selectors.current_notice(notice_identifier, purpose, locale=locale)
     if notice is None:
         raise NotFoundError()
@@ -504,9 +509,18 @@ def notice_withdraw(request, notice_identifier: str, payload: NoticeAcceptanceSc
     exclude_unset=True,
     operation_id="privacy_acceptance_list",
 )
-def acceptance_list(request, page: PageQuery, page_size: PageSizeQuery):
+def acceptance_list(
+    request,
+    page: PageQuery,
+    page_size: PageSizeQuery,
+    purpose_workflow: str = Query(default=""),
+):
     prepare_api_operation(request, "privacy_acceptance_list")
-    return queries.acceptance_page(_actor(request), _page(page, page_size), purpose_workflow=request.GET.get("purpose_workflow", "")).as_dict()
+    return queries.acceptance_page(
+        _actor(request),
+        _page(page, page_size),
+        purpose_workflow=purpose_workflow or "",
+    ).as_dict()
 
 
 @router.get(

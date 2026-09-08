@@ -7,7 +7,7 @@ from uuid import UUID
 
 from django.http import HttpResponse
 from django.middleware.csrf import get_token
-from ninja import Router, Status
+from ninja import Query, Router, Status
 
 from apps.account_security.api_tokens import (
     ApiRateLimited,
@@ -572,11 +572,15 @@ def _replay(value):
     exclude_unset=True,
     operation_id="me_activity_list",
 )
-def activity(request, page: PageQuery, page_size: PageSizeQuery):
+def activity(
+    request,
+    page: PageQuery,
+    page_size: PageSizeQuery,
+    category: str = Query(default="all"),
+):
     actor = _active_actor(request)
     prepare_api_operation(request, "me_activity_list")
-    category = str(request.GET.get("category", "all") or "all")
-    command = ActivityQueryCommand(category=category)
+    command = ActivityQueryCommand(category=category or "all")
     return get_activity_page(actor, _page(page, page_size), category=command.category).as_dict()
 
 

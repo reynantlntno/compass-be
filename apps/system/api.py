@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from ninja import Router, Schema
+from ninja import Query, Router, Schema
 
 from apps.common.api.idempotency import ApiMutationOutcome, run_api_mutation
 from apps.common.api.operations import prepare_api_operation
@@ -402,11 +402,16 @@ def health_check(request, payload: HealthCheckSchema):
 
 
 @router.get("/errors/", response=SystemErrorPageSchema, exclude_unset=True, operation_id="system_errors_list")
-def errors(request, page: PageQuery, page_size: PageSizeQuery):
+def errors(
+    request,
+    page: PageQuery,
+    page_size: PageSizeQuery,
+    unresolved_only: bool = Query(default=False),
+    category: str | None = Query(default=None),
+):
     _require(can_list_application_error_events, _actor(request))
     prepare_api_operation(request, "system_errors_list")
-    unresolved_only = str(request.GET.get("unresolved_only", "")).lower() in {"1", "true", "yes"}
-    category = str(request.GET.get("category", "") or "").strip() or None
+    category = (category or "").strip() or None
     return diagnostic_page(_actor(request), _page(page, page_size), unresolved_only=unresolved_only, category=category)
 
 

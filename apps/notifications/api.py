@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from ninja import Router, Schema
+from ninja import Query, Router, Schema
 
 from apps.access_control.authority import has_fixed_capability
 from apps.access_control.capabilities import Capability
@@ -214,8 +214,13 @@ def _require_delivery_access(actor):
 
 
 @router.get("/", response=NotificationPageSchema, operation_id="notifications_list")
-def list_notifications(request, page: PageQuery, page_size: PageSizeQuery):
-    status_filter = str(request.GET.get("status", "") or "").strip() or None
+def list_notifications(
+    request,
+    page: PageQuery,
+    page_size: PageSizeQuery,
+    status: str | None = Query(default=None),
+):
+    status_filter = (status or "").strip() or None
     if status_filter not in {None, "unread", "read", "archived"}:
         raise ValidationError(field_errors={"status": ["Invalid notification status."]})
     return notification_page(_actor(request), _page(page, page_size), status_filter=status_filter).as_dict()
@@ -254,12 +259,19 @@ def update_preference(request, notification_type: str, payload: NotificationPref
 
 
 @router.get("/delivery/", response=TechnicalDeliveryPageSchema, operation_id="notifications_delivery_list")
-def list_delivery_metadata(request, page: PageQuery, page_size: PageSizeQuery):
+def list_delivery_metadata(
+    request,
+    page: PageQuery,
+    page_size: PageSizeQuery,
+    status: str | None = Query(default=None),
+    delivery_state: str | None = Query(default=None),
+    template_key: str | None = Query(default=None),
+):
     actor = _actor(request)
     _require_delivery_access(actor)
-    status_filter = str(request.GET.get("status", "") or "").strip() or None
-    delivery_state = str(request.GET.get("delivery_state", "") or "").strip() or None
-    template_key = str(request.GET.get("template_key", "") or "").strip() or None
+    status_filter = (status or "").strip() or None
+    delivery_state = (delivery_state or "").strip() or None
+    template_key = (template_key or "").strip() or None
     if status_filter not in {None, "pending", "processing", "sent", "failed", "dead", "cancelled"}:
         raise ValidationError(field_errors={"status": ["Invalid delivery status."]})
     if delivery_state not in {None, "queued", "sending", "sent", "delayed", "failed", "retry_exhausted", "bounced", "cancelled"}:
