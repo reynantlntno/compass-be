@@ -581,6 +581,11 @@ def check_notification_provider_settings(app_configs, **kwargs):
                     id="system.E063",
                 )
             )
+    else:
+        if use_tls == use_ssl:
+            errors.append(Error("Exactly one SMTP TLS mode must be enabled in deployment.", id="system.E063"))
+        if not getattr(settings, "EMAIL_HOST_USER", "") or not getattr(settings, "EMAIL_HOST_PASSWORD", ""):
+            errors.append(Error("SMTP credentials must be supplied by the deployment secret manager.", id="system.E064"))
 
     archive_max_bytes = getattr(settings, "BACKUP_ARCHIVE_MAX_BYTES", None)
     legacy_fernet_max_bytes = getattr(settings, "BACKUP_LEGACY_FERNET_MAX_BYTES", None)
@@ -598,11 +603,6 @@ def check_notification_provider_settings(app_configs, **kwargs):
                 id="system.E035",
             )
         )
-    else:
-        if use_tls == use_ssl:
-            errors.append(Error("Exactly one SMTP TLS mode must be enabled in deployment.", id="system.E063"))
-        if not getattr(settings, "EMAIL_HOST_USER", "") or not getattr(settings, "EMAIL_HOST_PASSWORD", ""):
-            errors.append(Error("SMTP credentials must be supplied by the deployment secret manager.", id="system.E064"))
     from config.runtime_settings import RUNTIME_SETTING_RULES
 
     if RUNTIME_SETTING_RULES.get("EMAIL_TIMEOUT") != ("int", 1, 60):

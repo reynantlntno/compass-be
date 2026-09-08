@@ -117,6 +117,7 @@ def _brand_asset_scope_queryset(asset):
     queryset = BrandAsset.objects.select_for_update().filter(
         status=AssetStatusChoices.ACTIVE,
         asset_type=asset.asset_type,
+        semantic_role=asset.semantic_role,
         usage_context=asset.usage_context,
         placement=asset.placement,
         owner_type=asset.owner_type,
