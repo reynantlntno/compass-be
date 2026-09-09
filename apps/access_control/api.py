@@ -15,6 +15,9 @@ from apps.access_control.authority import (
 from apps.access_control.capabilities import CAPABILITY_SPECS, Capability
 from apps.access_control.choices import GrantReasonCode, GrantSourceType, RevocationReasonCode, ScopeMode
 from apps.access_control.models import WorkflowAuthorityGrant
+from apps.access_control.projections import project_counselor_coverage
+from apps.access_control.rules import is_active_nonlegacy_actor, is_counselor
+from apps.access_control.scopes import get_live_counselor_coverages
 from apps.accounts.models import RoleChoices, User
 from apps.common.api.idempotency import ApiMutationOutcome, run_api_mutation
 from apps.common.api.operations import prepare_api_operation
@@ -117,6 +120,22 @@ class EffectiveAuthorityProjectionSchema(Schema):
     is_head_guidance: bool
     effective_capabilities: list[EffectiveCapabilityProjectionSchema]
     grants: list[GrantProjectionSchema]
+
+
+class CounselorCoverageProjectionSchema(Schema):
+    scope_label: str
+    campus: str | None = None
+    college: str | None = None
+    department: str | None = None
+    program: str | None = None
+    is_primary: bool
+
+
+class CounselorCoveragePageSchema(Schema):
+    items: list[CounselorCoverageProjectionSchema]
+    page: int
+    page_size: int
+    total: int
 
 
 class CapabilityPageSchema(Schema):
@@ -286,6 +305,24 @@ def me(request):
         "effective_capabilities": _effective_projection(context),
         "grants": [_project(grant) for grant in context.grants[:100]],
     }
+
+
+@router.get(
+    "/me/coverage/",
+    response=CounselorCoveragePageSchema,
+    operation_id="authority_me_coverage",
+)
+def me_coverage(request, page: PageQuery, page_size: PageSizeQuery):
+    actor = _actor(request)
+    page_request = page_request_from_values(page, page_size)
+    if not is_active_nonlegacy_actor(actor) or not is_counselor(actor):
+        return page_result([], page_request)
+
+    coverages = get_live_counselor_coverages(actor).order_by(
+        "-is_primary", "campus", "college", "department", "program", "pk",
+    )
+    projected = [project_counselor_coverage(coverage) for coverage in coverages]
+    return page_result(projected, page_request)
 
 
 @router.post("/grants/", response=GrantProjectionSchema, operation_id="authority_grant_create")

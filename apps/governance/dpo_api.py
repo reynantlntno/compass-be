@@ -4,6 +4,7 @@ from datetime import datetime
 from uuid import UUID
 
 from ninja import Router, Schema
+from pydantic import Field
 
 from apps.common.api.idempotency import ApiMutationOutcome, run_api_mutation
 from apps.common.api.operations import prepare_api_operation
@@ -40,6 +41,10 @@ class DPOAppointmentSchema(Schema):
     status: str
     appointed_at: str
     retired_at: str | None = None
+
+
+class CurrentDPOAppointmentSchema(Schema):
+    label: str = Field(..., max_length=40)
 
 
 class GovernanceReasonSchema(Schema):
@@ -88,6 +93,18 @@ def dpo_appointment_view(request):
     if value is None:
         raise NotFoundError()
     return project_dpo_appointment(value)
+
+
+@router.get(
+    "/dpo-appointment/me/",
+    response=CurrentDPOAppointmentSchema,
+    exclude_unset=True,
+    operation_id="policies_dpo_appointment_me",
+)
+def dpo_appointment_me(request):
+    if not is_current_dpo(_actor(request)):
+        raise NotFoundError()
+    return {"label": "DPO"}
 
 
 @router.post(

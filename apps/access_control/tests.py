@@ -10,6 +10,7 @@ from django.test import TestCase
 from django.utils import timezone
 
 from apps.accounts.models import RoleChoices, User
+from apps.account_security.api_tokens import issue_token_pair
 from apps.access_control.authority import (
     AuthorityReason,
     build_authority_context,
@@ -359,6 +360,78 @@ class AuthorityApiContractTests(TestCase):
     def test_authority_routes_are_bearer_protected(self):
         response = Client().get("/api/v1/authority/me/")
         self.assertEqual(response.status_code, 401)
+
+    def test_counselor_coverage_self_projection_is_current_complete_and_safe(self):
+        today = timezone.localdate()
+        counselor = user("coverage-api-counselor@example.test", RoleChoices.COUNSELOR)
+        manager = head("coverage-api-head@example.test")
+        assigned = CounselorCoverage.objects.create(
+            counselor=counselor,
+            campus="Main Campus",
+            college="CCMS",
+            department="Guidance",
+            program="BS Psychology",
+            is_primary=True,
+            starts_at=today,
+            assigned_by=manager,
+        )
+        CounselorCoverage.objects.create(
+            counselor=counselor,
+            starts_at=today,
+            is_primary=False,
+            assigned_by=manager,
+        )
+        CounselorCoverage.objects.create(
+            counselor=counselor,
+            college="Expired College",
+            starts_at=today - timedelta(days=10),
+            ends_at=today - timedelta(days=1),
+            assigned_by=manager,
+        )
+        CounselorCoverage.objects.create(
+            counselor=counselor,
+            college="Future College",
+            starts_at=today + timedelta(days=1),
+            assigned_by=manager,
+        )
+        inactive = user("coverage-api-inactive@example.test", RoleChoices.COUNSELOR, active=False)
+        CounselorCoverage.objects.create(counselor=inactive, starts_at=today)
+        student = user("coverage-api-student@example.test", RoleChoices.STUDENT)
+
+        token = issue_token_pair(counselor, assurance_verified=True).access_token
+        response = Client().get(
+            "/api/v1/authority/me/coverage/?page=1&page_size=100",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        payload = response.json()
+        self.assertEqual(payload["total"], 2)
+        self.assertEqual(len(payload["items"]), 2)
+        self.assertEqual(payload["items"][0]["college"], assigned.college)
+        self.assertEqual(payload["items"][1]["scope_label"], "All current coverage")
+        for item in payload["items"]:
+            self.assertEqual(
+                set(item), {"scope_label", "campus", "college", "department", "program", "is_primary"}
+            )
+            self.assertNotIn("id", item)
+            self.assertNotIn("assigned_by", item)
+            self.assertNotIn("reason_code", item)
+
+        student_token = issue_token_pair(student, assurance_verified=True).access_token
+        student_response = Client().get(
+            "/api/v1/authority/me/coverage/",
+            HTTP_AUTHORIZATION=f"Bearer {student_token}",
+        )
+        self.assertEqual(student_response.status_code, 200, student_response.content)
+        self.assertEqual(student_response.json()["items"], [])
+
+    def test_counselor_coverage_self_projection_route_is_documented(self):
+        from config.api.v1 import api_v1
+
+        schema = api_v1.get_openapi_schema()
+        operation = schema["paths"]["/api/v1/authority/me/coverage/"]["get"]
+        self.assertEqual(operation["operationId"], "authority_me_coverage")
+        self.assertIn("CounselorCoveragePageSchema", str(operation))
 
     def test_authority_schema_has_stable_operations_and_bearer_security(self):
         from config.api.v1 import api_v1

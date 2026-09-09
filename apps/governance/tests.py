@@ -609,6 +609,52 @@ class GovernanceApiContractTests(TestCase):
         self.assertEqual(retire_replay.status_code, 200, retire_replay.content)
         self.assertEqual(retire_replay.json(), retired_payload)
 
+    def test_current_dpo_self_projection_is_safe_and_effective_only(self):
+        self._create_dpo_service()
+
+        current = self.client.get(
+            "/api/v1/policies/dpo-appointment/me/",
+            **self._headers(self.dpo),
+        )
+        self.assertEqual(current.status_code, 200, current.content)
+        self.assertEqual(current.json(), {"label": "DPO"})
+        self.assertNotIn("appointment_reference", current.json())
+        self.assertNotIn("contact_email", current.json())
+        self.assertNotIn("holder_id", current.json())
+
+        for actor in (self.head, self.reviewer, self.it):
+            with self.subTest(actor=actor.email):
+                self.assertEqual(
+                    self.client.get(
+                        "/api/v1/policies/dpo-appointment/me/",
+                        **self._headers(actor),
+                    ).status_code,
+                    404,
+                )
+
+    def test_current_dpo_self_projection_hides_expired_and_retired_appointments(self):
+        appointment = self._create_dpo_service()
+        appointment.valid_until = self.now - timedelta(minutes=1)
+        appointment.save(update_fields=["valid_until", "updated_at"])
+        self.assertEqual(
+            self.client.get(
+                "/api/v1/policies/dpo-appointment/me/",
+                **self._headers(self.dpo),
+            ).status_code,
+            404,
+        )
+
+        appointment.valid_until = self.now + timedelta(days=365)
+        appointment.status = DPOAppointmentStatus.RETIRED
+        appointment.save(update_fields=["valid_until", "status", "updated_at"])
+        self.assertEqual(
+            self.client.get(
+                "/api/v1/policies/dpo-appointment/me/",
+                **self._headers(self.dpo),
+            ).status_code,
+            404,
+        )
+
     def test_reviewer_api_responses_are_typed_listable_and_replay_safe(self):
         self._create_dpo_service()
         body = {
