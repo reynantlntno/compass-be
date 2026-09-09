@@ -12,6 +12,7 @@ from apps.account_security.network import get_client_ip_from_headers
 from apps.access_control.authority import has_fixed_capability
 from apps.access_control.capabilities import Capability
 from apps.common.api.idempotency import ApiMutationOutcome, run_api_mutation
+from apps.common.api.constants import API_MAX_CAPTCHA_RESPONSE_LENGTH
 from apps.common.api.operations import prepare_api_operation
 from apps.common.api.pagination import PageQuery, PageSizeQuery, page_request_from_values
 from apps.common.api.schemas import PageResultSchema
@@ -543,6 +544,7 @@ class ContactSubmissionCreateSchema(Schema):
     message_body: str = Field(default="", max_length=32_768)
     privacy_acknowledged: bool
     urgent_support_disclaimer_acknowledged: bool
+    captcha_response: str | None = Field(default=None, max_length=API_MAX_CAPTCHA_RESPONSE_LENGTH)
 
 
 class ContactAssignmentSchema(Schema):
@@ -1026,10 +1028,14 @@ def archive_service_guide_api(request, guide_id: UUID):
 def create_contact_submission_api(request, payload: ContactSubmissionCreateSchema):
     # The contact domain keeps its own request-key replay record; the shared
     # preparation still supplies the central abuse-control decision.
-    prepare_api_operation(request, "content_contact_create")
+    prepare_api_operation(
+        request,
+        "content_contact_create",
+        captcha_response=payload.captcha_response,
+    )
     raw_key = str((request.META or {}).get("HTTP_IDEMPOTENCY_KEY", "") or "").strip()
     idempotency_key = normalize_request_key(raw_key, max_length=128) if raw_key else None
-    command = ContactSubmissionCommand(**payload.dict())
+    command = ContactSubmissionCommand(**payload.dict(exclude={"captcha_response"}))
     submission = create_contact_submission(
         command,
         submitted_by=getattr(getattr(request, "auth", None), "user", None),

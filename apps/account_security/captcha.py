@@ -24,9 +24,6 @@ CAPTCHA_WIDGET_ACTIONS = frozenset(
         "recovery",
         "contact",
         "activation",
-        "token_verify",
-        "ecounseling_join",
-        "student_search",
     }
 )
 

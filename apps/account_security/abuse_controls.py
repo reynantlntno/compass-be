@@ -21,6 +21,7 @@ from apps.account_security.captcha import CaptchaVerificationResult, verify_capt
 from apps.account_security.models import CaptchaChallengeState, SecurityThrottleState
 from apps.account_security.tokens import hash_identifier
 from apps.account_security.defaults import ABUSE_POLICY_DEFAULTS
+from apps.common.exceptions import ConditionalChallengeError, DependencyFailureError
 
 
 class AbuseAction(StrEnum):
@@ -67,10 +68,23 @@ POLICIES: dict[str, AbusePolicy] = {
 }
 
 CAPTCHA_ACTIONS = {
+    AbuseAction.LOGIN: "login",
     AbuseAction.RECOVERY_REQUEST: "recovery",
-    AbuseAction.RECOVERY_RESEND: "recovery",
     AbuseAction.RECOVERY_VERIFY: "recovery",
+    AbuseAction.CONTACT: "contact",
+    AbuseAction.ACTIVATION: "activation",
 }
+
+INLINE_CHALLENGE_ABUSE_ACTIONS = frozenset(
+    str(action)
+    for action in (
+        AbuseAction.LOGIN,
+        AbuseAction.RECOVERY_REQUEST,
+        AbuseAction.RECOVERY_VERIFY,
+        AbuseAction.ACTIVATION,
+        AbuseAction.CONTACT,
+    )
+)
 
 _SAFE_REASON_PREFIXES = (
     "ABUSE_",
@@ -583,6 +597,49 @@ def consume_captcha_grant(
         row.save(update_fields=["status", "metadata_json", "updated_at"])
         return True
     return False
+
+
+def enforce_inline_challenge(
+    action: str | AbuseAction,
+    response_token: str | None,
+    *,
+    ip: object = None,
+    session: object = None,
+    subject: object = None,
+    retry_after: int | None = None,
+) -> CaptchaVerificationResult:
+    """Verify and consume one endpoint-scoped challenge in the same request."""
+
+    action_key = str(action)
+    if action_key not in INLINE_CHALLENGE_ABUSE_ACTIONS:
+        raise ValueError("Inline CAPTCHA is not enabled for this action.")
+
+    result = verify_challenge(
+        action,
+        str(response_token or ""),
+        ip=ip,
+        session=session,
+        subject=subject,
+    )
+    if result.unavailable or result.configuration_error:
+        raise DependencyFailureError(retry_after=60)
+    if not result.valid or not result.grant:
+        raise ConditionalChallengeError(
+            CAPTCHA_ACTIONS.get(action) or CAPTCHA_ACTIONS[action_key],
+            retry_after=retry_after or 60,
+        )
+    if not consume_captcha_grant(
+        action,
+        result.grant,
+        subject=subject,
+        ip=ip,
+        session=session,
+    ):
+        raise ConditionalChallengeError(
+            CAPTCHA_ACTIONS.get(action) or CAPTCHA_ACTIONS[action_key],
+            retry_after=retry_after or 60,
+        )
+    return result
 
 
 @transaction.atomic

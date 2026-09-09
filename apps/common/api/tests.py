@@ -7,7 +7,12 @@ from unittest import mock
 from django.http import JsonResponse
 from django.test import RequestFactory, SimpleTestCase
 
-from apps.common.api.constants import API_MAX_JSON_BODY_BYTES
+from apps.common.api.constants import (
+    API_MAX_CAPTCHA_RESPONSE_LENGTH,
+    API_MAX_IDEMPOTENCY_KEY_LENGTH,
+    API_MAX_JSON_BODY_BYTES,
+    IDEMPOTENCY_KEY_HEADER,
+)
 from apps.common.api.correlation import attach_request_correlation, trace_id
 from apps.common.api.errors import render_error_response, status_for_code
 from apps.common.api.idempotency import require_idempotency_key
@@ -23,6 +28,8 @@ from apps.common.contracts import (
     PageRequest,
 )
 from apps.common.exceptions import (
+    ConditionalChallengeError,
+    DependencyFailureError,
     ErrorCode,
     RateLimitError,
     ValidationError,
@@ -59,10 +66,20 @@ class ApiErrorContractTests(SimpleTestCase):
         payload = json.loads(response.content)
         self.assertEqual(
             set(payload),
-            {"detail", "code", "request_id", "error_id", "field_errors"},
+            {
+                "detail",
+                "code",
+                "request_id",
+                "error_id",
+                "field_errors",
+                "challenge_required",
+                "challenge_action",
+            },
         )
         self.assertEqual(payload["detail"], "The submitted data is invalid.")
         self.assertNotIn("internal validation explanation", response.content.decode())
+        self.assertFalse(payload["challenge_required"])
+        self.assertIsNone(payload["challenge_action"])
         self.assertTrue(response["X-Request-ID"].startswith("REQ-"))
         self.assertEqual(response["Cache-Control"], "no-store")
         self.assertEqual(response["X-Robots-Tag"], "noindex, nofollow, noarchive")
@@ -73,6 +90,30 @@ class ApiErrorContractTests(SimpleTestCase):
         self.assertEqual(response.status_code, 429)
         self.assertEqual(response["Retry-After"], "17")
         self.assertEqual(response["Cache-Control"], "no-store")
+
+    def test_conditional_challenge_has_only_safe_action_metadata(self):
+        request = RequestFactory().post("/api/v1/test/")
+        response = render_error_response(
+            request,
+            ConditionalChallengeError("contact", retry_after=31),
+        )
+        payload = json.loads(response.content)
+        self.assertEqual(response.status_code, 429)
+        self.assertTrue(payload["challenge_required"])
+        self.assertEqual(payload["challenge_action"], "contact")
+        self.assertNotIn("raw-turnstile-token", response.content.decode())
+
+    def test_invalid_challenge_action_and_unexpected_metadata_fail_closed(self):
+        with self.assertRaises(ValueError):
+            ConditionalChallengeError("token_verify")
+
+        request = RequestFactory().post("/api/v1/test/")
+        error = RateLimitError(retry_after=10)
+        error.challenge_required = True
+        error.challenge_action = "token_verify"
+        payload = json.loads(render_error_response(request, error).content)
+        self.assertFalse(payload["challenge_required"])
+        self.assertIsNone(payload["challenge_action"])
 
 
 class RichTextBoundaryTests(SimpleTestCase):
@@ -237,6 +278,48 @@ class ApiOperationRegistryTests(SimpleTestCase):
         self.assertEqual(prepared.operation_id, "authority_grant_create")
         self.assertEqual(prepared.idempotency_key, "operation-key")
         require_key.assert_called_once_with(request)
+
+    def test_inline_challenges_are_limited_to_selected_public_actions(self):
+        request = RequestFactory().post("/api/v1/contact-submissions/")
+        challenge_decision = AbuseDecision(allowed=True, challenge_required=True, retry_after=23)
+        with mock.patch(
+            "apps.common.api.operations.evaluate",
+            return_value=challenge_decision,
+        ), mock.patch(
+            "apps.common.api.operations.record_volume",
+            return_value=challenge_decision,
+        ), mock.patch(
+            "apps.common.api.operations.enforce_inline_challenge",
+        ) as enforce:
+            prepare_api_operation(
+                request,
+                "content_contact_create",
+                captcha_response="transient-token",
+            )
+        enforce.assert_called_once_with(
+            "contact",
+            "transient-token",
+            subject=None,
+            ip="127.0.0.1",
+            session=None,
+            retry_after=23,
+        )
+
+        with mock.patch(
+            "apps.common.api.operations.evaluate",
+            return_value=challenge_decision,
+        ), mock.patch(
+            "apps.common.api.operations.record_volume",
+            return_value=challenge_decision,
+        ), mock.patch(
+            "apps.common.api.operations.enforce_inline_challenge",
+        ) as enforce:
+            prepare_api_operation(
+                request,
+                "form_collection_invitation_verify",
+                captcha_response="must-be-ignored",
+            )
+        enforce.assert_not_called()
 
     def test_every_current_route_operation_is_registered(self):
         expected = {
@@ -491,6 +574,65 @@ class ApiOperationRegistryTests(SimpleTestCase):
                 self.assertTrue(spec.idempotency_required, operation_id)
 
 
+class InlineChallengeTests(SimpleTestCase):
+    def test_invalid_challenge_results_require_the_same_safe_retry_signal(self):
+        from apps.account_security.abuse_controls import enforce_inline_challenge
+        from apps.account_security.captcha import CaptchaVerificationResult
+
+        for reason_code in (
+            "CAPTCHA_RESPONSE_MISSING",
+            "CAPTCHA_RESPONSE_INVALID",
+            "CAPTCHA_ACTION_MISMATCH",
+            "CAPTCHA_HOSTNAME_MISMATCH",
+        ):
+            with self.subTest(reason_code=reason_code), mock.patch(
+                "apps.account_security.abuse_controls.verify_challenge",
+                return_value=CaptchaVerificationResult("invalid", reason_code),
+            ):
+                with self.assertRaises(ConditionalChallengeError):
+                    enforce_inline_challenge("contact", "raw-turnstile-token")
+
+    def test_provider_failure_is_reduced_to_a_dependency_error(self):
+        from apps.account_security.abuse_controls import enforce_inline_challenge
+        from apps.account_security.captcha import CaptchaVerificationResult
+
+        with mock.patch(
+            "apps.account_security.abuse_controls.verify_challenge",
+            return_value=CaptchaVerificationResult("unavailable", "CAPTCHA_PROVIDER_UNAVAILABLE"),
+        ):
+            with self.assertRaises(DependencyFailureError):
+                enforce_inline_challenge("contact", "raw-turnstile-token")
+
+    def test_valid_challenge_is_consumed_without_returning_the_grant(self):
+        from apps.account_security.abuse_controls import enforce_inline_challenge
+        from apps.account_security.captcha import CaptchaVerificationResult
+
+        result = CaptchaVerificationResult("valid", "CAPTCHA_VERIFIED", grant="opaque-grant")
+        with mock.patch(
+            "apps.account_security.abuse_controls.verify_challenge",
+            return_value=result,
+        ), mock.patch(
+            "apps.account_security.abuse_controls.consume_captcha_grant",
+            return_value=True,
+        ) as consume:
+            verified = enforce_inline_challenge(
+                "contact",
+                "raw-turnstile-token",
+                subject="subject",
+                ip="ip",
+                session="session",
+            )
+
+        self.assertIs(verified, result)
+        consume.assert_called_once_with(
+            "contact",
+            "opaque-grant",
+            subject="subject",
+            ip="ip",
+            session="session",
+        )
+
+
 class ApiResponseDocumentationTests(SimpleTestCase):
     @staticmethod
     def _operations(document):
@@ -510,7 +652,15 @@ class ApiResponseDocumentationTests(SimpleTestCase):
         self.assertIn("ApiErrorSchema", document["components"]["schemas"])
         self.assertEqual(
             set(document["components"]["schemas"]["ApiErrorSchema"]["properties"]),
-            {"detail", "code", "request_id", "error_id", "field_errors"},
+            {
+                "detail",
+                "code",
+                "request_id",
+                "error_id",
+                "field_errors",
+                "challenge_required",
+                "challenge_action",
+            },
         )
         logout_responses = operations["auth_logout"]["responses"]
         logout_204 = logout_responses.get(204) or logout_responses.get("204")
@@ -526,6 +676,129 @@ class ApiResponseDocumentationTests(SimpleTestCase):
                         response["content"]["application/json"]["schema"],
                         {"$ref": API_ERROR_SCHEMA_REF},
                     )
+
+    def test_idempotency_header_matches_the_operation_registry(self):
+        from config.api.v1 import api_v1
+
+        document = api_v1.get_openapi_schema()
+        operations = self._operations(document)
+        parameter = document["components"]["parameters"]["IdempotencyKeyHeader"]
+        self.assertEqual(parameter["name"], IDEMPOTENCY_KEY_HEADER)
+        self.assertEqual(parameter["in"], "header")
+        self.assertTrue(parameter["required"])
+        self.assertEqual(
+            parameter["schema"],
+            {
+                "type": "string",
+                "maxLength": API_MAX_IDEMPOTENCY_KEY_LENGTH,
+            },
+        )
+
+        required_operations = {
+            operation_id
+            for operation_id, spec in API_OPERATION_SPECS.items()
+            if spec.idempotency_required
+        }
+        documented_required_operations = {
+            operation_id
+            for operation_id in required_operations
+            if operation_id in operations
+        }
+        self.assertEqual(documented_required_operations, required_operations)
+
+        for operation_id, operation in operations.items():
+            with self.subTest(operation_id=operation_id):
+                references = [
+                    parameter
+                    for parameter in operation.get("parameters", [])
+                    if isinstance(parameter, dict)
+                    and parameter.get("$ref") == "#/components/parameters/IdempotencyKeyHeader"
+                ]
+                if operation_id in required_operations:
+                    self.assertEqual(len(references), 1)
+                else:
+                    self.assertEqual(references, [])
+
+        for operation_id in (
+            "auth_login",
+            "auth_login_verify",
+            "auth_logout",
+            "content_contact_create",
+        ):
+            self.assertNotIn(
+                {"$ref": "#/components/parameters/IdempotencyKeyHeader"},
+                operations[operation_id].get("parameters", []),
+            )
+
+    def test_conditional_challenge_inputs_are_only_on_selected_operations(self):
+        from config.api.v1 import api_v1
+
+        document = api_v1.get_openapi_schema()
+        operations = self._operations(document)
+
+        def resolve(schema):
+            while "$ref" in schema:
+                schema = document["components"]["schemas"][schema["$ref"].rsplit("/", 1)[-1]]
+            if "anyOf" in schema:
+                for branch in schema["anyOf"]:
+                    if "$ref" in branch or branch.get("type") == "object":
+                        resolved = resolve(branch)
+                        if resolved.get("properties") is not None:
+                            return resolved
+            return schema
+
+        def request_schema(operation_id):
+            request_body = operations[operation_id].get("requestBody", {})
+            body = request_body.get("content", {}).get("application/json")
+            if body is None:
+                return {}
+            return resolve(body["schema"])
+
+        def property_schema(schema, property_name):
+            property_definition = schema["properties"][property_name]
+            if "anyOf" not in property_definition:
+                return property_definition
+            return next(
+                branch
+                for branch in property_definition["anyOf"]
+                if branch.get("type") == "string"
+            )
+
+        selected = {
+            "auth_login",
+            "auth_staff_activation",
+            "auth_student_activation",
+            "auth_recovery_request",
+            "auth_recovery_reset",
+            "content_contact_create",
+        }
+        excluded = {
+            "auth_login_verify",
+            "auth_login_otp_resend",
+            "auth_logout",
+            "auth_token_refresh",
+            "counseling_ecounseling_join",
+            "form_collection_invitation_verify",
+            "graduate_tracer_start",
+            "graduate_tracer_draft_save",
+            "graduate_tracer_submit",
+            "exit_interviews_start",
+            "exit_interviews_draft_save",
+            "exit_interviews_submit",
+        }
+        for operation_id in selected:
+            with self.subTest(operation_id=operation_id):
+                schema = request_schema(operation_id)
+                self.assertIn("captcha_response", schema.get("properties", {}))
+                self.assertNotIn("captcha_response", schema.get("required", []))
+                self.assertEqual(
+                    property_schema(schema, "captcha_response").get("maxLength"),
+                    API_MAX_CAPTCHA_RESPONSE_LENGTH,
+                )
+
+        for operation_id in excluded:
+            with self.subTest(operation_id=operation_id):
+                self.assertNotIn("captcha_response", request_schema(operation_id).get("properties", {}))
 
     def test_manually_read_query_filters_are_explicit_and_typed(self):
         from config.api.v1 import api_v1

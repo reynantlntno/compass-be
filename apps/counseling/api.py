@@ -464,9 +464,7 @@ class CancelSchema(Schema):
 
 
 class JoinSchema(Schema):
-    # CAPTCHA responses are transient request input. They are passed to the
-    # abuse-control boundary and never included in fingerprints or outputs.
-    captcha_response: str = ""
+    pass
 
 
 class RecordingStartSchema(Schema):
@@ -2065,14 +2063,9 @@ def join_route(request, reference_code: str, payload: JoinSchema | None = None):
     prepare_api_operation(request, "counseling_ecounseling_join")
     actor = _actor(request)
     meta = getattr(request, "META", {}) or {}
-    payload_data = _payload(payload) if payload is not None else {}
-    captcha_response = payload_data.get("captcha_response", "")
-    if len(captcha_response) > 4096:
-        raise ValidationError()
     request_context = RequestMetadata(
         ip_address=get_client_ip_from_headers(meta),
         user_agent=str(meta.get("HTTP_USER_AGENT", "") or "")[:512],
-        captcha_response=captcha_response,
     )
     context = generate_join_context(
         actor,

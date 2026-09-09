@@ -170,6 +170,11 @@ def csrf(request):
 )
 def staff_activation(request, payload: StaffActivationRequestSchema):
     _reject_conflicting_session_credentials(request)
+    prepare_api_operation(
+        request,
+        "auth_staff_activation",
+        captcha_response=payload.captcha_response,
+    )
     from apps.accounts.commands import StaffInvitationActivationCommand
     from apps.accounts.services import activate_staff_invitation
     try:
@@ -253,7 +258,11 @@ def staff_recovery_request(request, payload: StaffAssistedRecoveryRequestSchema)
 def student_activation(request, payload: StudentActivationRequestSchema):
     """Activate only an inactive STUDENT through the single-use invitation flow."""
     _reject_conflicting_session_credentials(request)
-    prepare_api_operation(request, "auth_student_activation")
+    prepare_api_operation(
+        request,
+        "auth_student_activation",
+        captcha_response=payload.captcha_response,
+    )
     context = _request_context(request)
     user = activate_student_account(
         StudentActivationCommand(
@@ -295,6 +304,7 @@ def login(request, payload: LoginRequestSchema):
             payload.password,
             _request_context(request),
             trusted_device_token=trusted_token,
+            captcha_response=payload.captcha_response,
         )
     except ApiTokenError as error:
         _raise_auth_error(error, default_detail="Invalid credentials.")
@@ -809,7 +819,11 @@ def password_change(request, payload: PasswordChangeRequestSchema):
 )
 def recovery_request(request, payload: RecoveryRequestSchema):
     _reject_conflicting_session_credentials(request)
-    prepared = prepare_api_operation(request, "auth_recovery_request")
+    prepared = prepare_api_operation(
+        request,
+        "auth_recovery_request",
+        captcha_response=payload.captcha_response,
+    )
     del prepared
     context = _request_context(request)
     return request_password_recovery(
@@ -827,7 +841,11 @@ def recovery_request(request, payload: RecoveryRequestSchema):
 )
 def recovery_reset(request, payload: RecoveryResetRequestSchema):
     _reject_conflicting_session_credentials(request)
-    prepared = prepare_api_operation(request, "auth_recovery_reset")
+    prepared = prepare_api_operation(
+        request,
+        "auth_recovery_reset",
+        captcha_response=payload.captcha_response,
+    )
     del prepared
     context = _request_context(request)
     command = RecoveryResetCommand(

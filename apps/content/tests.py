@@ -98,9 +98,11 @@ class ContentPublicContractTests(SimpleTestCase):
             message_body="A message",
             privacy_acknowledged=True,
             urgent_support_disclaimer_acknowledged=True,
+            captcha_response="transient-token",
         )
         self.assertEqual(payload.submission_type, "concern")
         self.assertEqual(payload.affiliation, "parent")
+        self.assertEqual(payload.captcha_response, "transient-token")
 
         with self.assertRaises(Exception):
             ContactSubmissionCreateSchema(
@@ -121,6 +123,13 @@ class ContentPublicContractTests(SimpleTestCase):
                 message_body="x" * 32_769,
                 privacy_acknowledged=True,
                 urgent_support_disclaimer_acknowledged=True,
+            )
+        with self.assertRaises(Exception):
+            ContactSubmissionCreateSchema(
+                subject="A subject",
+                privacy_acknowledged=True,
+                urgent_support_disclaimer_acknowledged=True,
+                captcha_response="x" * 2_049,
             )
 
     def test_service_guide_projection_keeps_current_metadata_and_iso_date(self):

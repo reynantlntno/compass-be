@@ -1,9 +1,15 @@
 """Explicit request and response schemas for account API operations."""
 
 from uuid import UUID
+from typing import Literal
 
 from ninja import Schema
 from pydantic import Field
+
+from apps.common.api.constants import API_MAX_CAPTCHA_RESPONSE_LENGTH
+
+
+ChallengeAction = Literal["login", "recovery", "activation", "contact"]
 
 
 class ErrorSchema(Schema):
@@ -12,12 +18,15 @@ class ErrorSchema(Schema):
     request_id: str
     error_id: str | None = None
     field_errors: dict[str, list[str]] = Field(default_factory=dict)
+    challenge_required: bool = False
+    challenge_action: ChallengeAction | None = None
 
 
 class LoginRequestSchema(Schema):
     email: str
     password: str
     trusted_device_token: str | None = None
+    captcha_response: str | None = Field(default=None, max_length=API_MAX_CAPTCHA_RESPONSE_LENGTH)
 
 
 class LoginVerifyRequestSchema(Schema):
@@ -83,6 +92,7 @@ class StaffActivationRequestSchema(Schema):
     token: str
     password: str
     password_confirmation: str
+    captcha_response: str | None = Field(default=None, max_length=API_MAX_CAPTCHA_RESPONSE_LENGTH)
 
 
 class StudentActivationRequestSchema(Schema):
@@ -91,6 +101,7 @@ class StudentActivationRequestSchema(Schema):
     token: str
     password: str
     password_confirmation: str
+    captcha_response: str | None = Field(default=None, max_length=API_MAX_CAPTCHA_RESPONSE_LENGTH)
 
 
 class StaffActivationResponseSchema(Schema):
@@ -165,12 +176,14 @@ class PasswordChangeRequestSchema(Schema):
 
 class RecoveryRequestSchema(Schema):
     email: str
+    captcha_response: str | None = Field(default=None, max_length=API_MAX_CAPTCHA_RESPONSE_LENGTH)
 
 
 class RecoveryResetRequestSchema(Schema):
     token: str
     new_password: str
     password_confirmation: str
+    captcha_response: str | None = Field(default=None, max_length=API_MAX_CAPTCHA_RESPONSE_LENGTH)
 
 
 class RecoveryResponseSchema(Schema):

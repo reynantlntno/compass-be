@@ -21,7 +21,6 @@ from apps.account_security.abuse_controls import (
     evaluate as evaluate_abuse,
     record_failure as record_abuse_failure,
     record_success as record_abuse_success,
-    verify_challenge,
 )
 from apps.common.contracts import RequestMetadata
 from apps.counseling.ecounseling_providers import (
@@ -789,24 +788,6 @@ def generate_join_context(
 
     if not decision.allowed:
         deny(ECounselingDeniedReasonCodeChoices.RATE_LIMITED)
-    if decision.challenge_required:
-        challenge = verify_challenge(
-            AbuseAction.ECOCOUNSELING_JOIN,
-            request_context.captcha_response,
-            ip=ip,
-            session=session_key,
-            subject=subject,
-        )
-        if not challenge.valid:
-            record_abuse_failure(
-                AbuseAction.ECOCOUNSELING_JOIN,
-                subject=subject,
-                ip=ip,
-                session=session_key,
-                token=token_scope,
-                reason_code=challenge.reason_code,
-            )
-            deny(ECounselingDeniedReasonCodeChoices.RATE_LIMITED, abuse_already_recorded=True)
 
     validation = validate_join_request(user, ecounseling_session, now=now)
     if not validation.allowed:

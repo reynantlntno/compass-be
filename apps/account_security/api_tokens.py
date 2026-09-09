@@ -13,6 +13,7 @@ from django.utils import timezone
 
 from apps.account_security.abuse_controls import (
     AbuseAction,
+    enforce_inline_challenge,
     evaluate,
     record_failure,
     record_success,
@@ -631,13 +632,27 @@ def rotate_refresh_token(
     return pair
 
 
-def _login_decision(email: str, request_context: RequestMetadata):
+def _login_decision(
+    email: str,
+    request_context: RequestMetadata,
+    *,
+    captcha_response: str | None = None,
+):
     ip = request_context.ip_address
     decision = evaluate(AbuseAction.LOGIN, subject=email, ip=ip)
     if decision.reason_code == "ABUSE_CONTROL_UNAVAILABLE":
         raise ApiSecurityUnavailable("Authentication is temporarily unavailable.")
-    if not decision.allowed or decision.challenge_required:
+    if not decision.allowed:
         raise ApiRateLimited(decision.retry_after)
+    if decision.challenge_required:
+        enforce_inline_challenge(
+            AbuseAction.LOGIN,
+            captcha_response,
+            subject=email,
+            ip=ip,
+            session=request_context.session_key,
+            retry_after=decision.retry_after,
+        )
     return ip
 
 
@@ -661,9 +676,14 @@ def begin_password_login(
     request_context: RequestMetadata,
     *,
     trusted_device_token: str | None = None,
+    captcha_response: str | None = None,
 ):
     normalized_email = str(email or "").strip().lower()
-    ip = _login_decision(normalized_email, request_context)
+    ip = _login_decision(
+        normalized_email,
+        request_context,
+        captcha_response=captcha_response,
+    )
     user_agent = request_context.user_agent
     user = authenticate(request=None, username=normalized_email, password=password)
     if not _user_can_receive_api_tokens(user):

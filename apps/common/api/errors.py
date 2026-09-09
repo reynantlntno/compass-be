@@ -49,6 +49,7 @@ _SENSITIVE_WORDS = {
     "password", "token", "otp", "secret", "credential", "authorization",
     "cookie", "email", "phone", "student", "note", "narrative", "ip",
 }
+_SAFE_CHALLENGE_ACTIONS = frozenset({"login", "recovery", "activation", "contact"})
 
 
 def status_for_code(code: ErrorCode | str) -> int:
@@ -132,12 +133,19 @@ def _headers(request, status: int, *, retry_after: int | None = None) -> dict[st
 def error_payload(request, exception: CompassError, *, status: int | None = None, error_id=None) -> dict:
     code = ErrorCode(getattr(exception, "code", ErrorCode.INTERNAL_ERROR))
     resolved_status = status if status is not None else status_for_code(code)
+    challenge_required = bool(getattr(exception, "challenge_required", False))
+    challenge_action = getattr(exception, "challenge_action", None)
+    if not challenge_required or challenge_action not in _SAFE_CHALLENGE_ACTIONS:
+        challenge_required = False
+        challenge_action = None
     payload = {
         "detail": getattr(exception, "public_message", InternalError.public_message),
         "code": code.value,
         "request_id": request_id(request),
         "error_id": _validated_error_id(error_id) if resolved_status >= 500 else None,
         "field_errors": _safe_field_errors(getattr(exception, "field_errors", {})),
+        "challenge_required": challenge_required,
+        "challenge_action": challenge_action,
     }
     return payload
 

@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from apps.account_security.abuse_controls import AbuseAction, evaluate, record_volume
+from apps.account_security.abuse_controls import (
+    AbuseAction,
+    INLINE_CHALLENGE_ABUSE_ACTIONS,
+    enforce_inline_challenge,
+    evaluate,
+    record_volume,
+)
 from apps.account_security.network import get_client_ip_from_headers
 from apps.common.api.idempotency import require_idempotency_key
 from apps.common.exceptions import RateLimitError
@@ -44,12 +50,18 @@ def _admin(operation_id: str) -> ApiOperationSpec:
 API_OPERATION_SPECS = {
     # Authentication and one-time activation flows retain their own
     # abuse/replay controls and are deliberately not idempotency-wrapped here.
-    "auth_login": ApiOperationSpec("auth_login", mutation=True),
+    "auth_login": ApiOperationSpec(
+        "auth_login", mutation=True, abuse_action=str(AbuseAction.LOGIN)
+    ),
     "auth_login_verify": ApiOperationSpec("auth_login_verify", mutation=True),
     "auth_csrf": ApiOperationSpec("auth_csrf"),
     "auth_token_refresh": ApiOperationSpec("auth_token_refresh", mutation=True),
     "auth_logout": ApiOperationSpec("auth_logout", mutation=True),
-    "auth_staff_activation": ApiOperationSpec("auth_staff_activation", mutation=True),
+    "auth_staff_activation": ApiOperationSpec(
+        "auth_staff_activation",
+        mutation=True,
+        abuse_action=str(AbuseAction.ACTIVATION),
+    ),
     "auth_student_activation": ApiOperationSpec(
         "auth_student_activation",
         mutation=True,
@@ -920,7 +932,12 @@ def _actor(request):
     return getattr(auth, "user", None)
 
 
-def prepare_api_operation(request, operation_id: str) -> PreparedApiOperation:
+def prepare_api_operation(
+    request,
+    operation_id: str,
+    *,
+    captcha_response: str | None = None,
+) -> PreparedApiOperation:
     """Apply the declared sensitive-action and idempotency boundary."""
 
     spec = get_operation_spec(operation_id)
@@ -948,6 +965,18 @@ def prepare_api_operation(request, operation_id: str) -> PreparedApiOperation:
         )
         if not counted.allowed:
             raise RateLimitError(retry_after=counted.retry_after or 60)
+        if (
+            spec.abuse_action in INLINE_CHALLENGE_ABUSE_ACTIONS
+            and (decision.challenge_required or counted.challenge_required)
+        ):
+            enforce_inline_challenge(
+                spec.abuse_action,
+                captcha_response,
+                subject=subject,
+                ip=ip_address,
+                session=session_key,
+                retry_after=counted.retry_after or decision.retry_after,
+            )
         retry_after = counted.retry_after
     idempotency_key = None
     if spec.idempotency_required:

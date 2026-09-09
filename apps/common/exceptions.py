@@ -161,6 +161,24 @@ class RateLimitError(DomainError):
     public_message = "Too many requests. Please try again later."
 
 
+class ConditionalChallengeError(RateLimitError):
+    """Ask a client for an endpoint-scoped abuse challenge.
+
+    The transport layer turns this into the ordinary rate-limit envelope and
+    exposes only the small allowlisted action label needed to mount a widget.
+    """
+
+    _ALLOWED_ACTIONS = frozenset({"login", "recovery", "activation", "contact"})
+
+    def __init__(self, challenge_action: str, *, retry_after: int | None = None):
+        action = str(challenge_action)
+        if action not in self._ALLOWED_ACTIONS:
+            raise ValueError("Challenge action is not allowlisted.")
+        self.challenge_required = True
+        self.challenge_action = action
+        super().__init__(retry_after=retry_after)
+
+
 class DependencyFailureError(DomainError):
     code = ErrorCode.DEPENDENCY_FAILURE
     public_message = "A required service is temporarily unavailable."

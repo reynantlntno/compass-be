@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from apps.account_security.network import get_client_ip_from_headers
-from apps.common.api.constants import API_MAX_IDEMPOTENCY_KEY_LENGTH
+from apps.common.api.constants import (
+    API_MAX_IDEMPOTENCY_KEY_LENGTH,
+    IDEMPOTENCY_KEY_HEADER,
+)
 from apps.common.exceptions import LifecycleConflictError, NotFoundError, PermissionDeniedError, ValidationError
 from apps.common.request_dedup import normalize_request_key
 from apps.workflow.services import (
@@ -20,7 +23,8 @@ from apps.workflow.services import (
 
 
 def _raw_key(request) -> str:
-    value = str((getattr(request, "META", {}) or {}).get("HTTP_IDEMPOTENCY_KEY", "") or "")
+    header_key = f"HTTP_{IDEMPOTENCY_KEY_HEADER.upper().replace('-', '_')}"
+    value = str((getattr(request, "META", {}) or {}).get(header_key, "") or "")
     try:
         return normalize_request_key(value, max_length=API_MAX_IDEMPOTENCY_KEY_LENGTH)
     except ValidationError as exc:

@@ -7,11 +7,17 @@ from typing import Any
 from ninja import NinjaAPI
 from ninja.schema import NinjaGenerateJsonSchema
 
+from apps.common.api.constants import (
+    API_MAX_IDEMPOTENCY_KEY_LENGTH,
+    IDEMPOTENCY_KEY_HEADER,
+)
+from apps.common.api.operations import API_OPERATION_SPECS
 from apps.common.api.schemas import ApiErrorSchema
 
 
 COMMON_ERROR_STATUS_CODES = (400, 401, 403, 404, 405, 409, 413, 422, 429, 500, 503)
 API_ERROR_SCHEMA_REF = "#/components/schemas/ApiErrorSchema"
+IDEMPOTENCY_KEY_PARAMETER_REF = "#/components/parameters/IdempotencyKeyHeader"
 
 _ERROR_DESCRIPTIONS = {
     400: "Bad Request",
@@ -80,6 +86,50 @@ def add_common_error_responses(document: dict[str, Any]) -> dict[str, Any]:
     return document
 
 
+def _has_idempotency_header(parameters: list[Any]) -> bool:
+    for parameter in parameters:
+        if not isinstance(parameter, dict):
+            continue
+        if parameter.get("$ref") == IDEMPOTENCY_KEY_PARAMETER_REF:
+            return True
+        if parameter.get("in") == "header" and parameter.get("name") == IDEMPOTENCY_KEY_HEADER:
+            return True
+    return False
+
+
+def add_idempotency_key_parameters(document: dict[str, Any]) -> dict[str, Any]:
+    """Document the required replay-safety header from the API operation registry."""
+
+    components = document.setdefault("components", {})
+    parameters = components.setdefault("parameters", {})
+    parameters.setdefault(
+        "IdempotencyKeyHeader",
+        {
+            "name": IDEMPOTENCY_KEY_HEADER,
+            "in": "header",
+            "required": True,
+            "description": "Stable key for retrying the same mutation intent safely.",
+            "schema": {
+                "type": "string",
+                "maxLength": API_MAX_IDEMPOTENCY_KEY_LENGTH,
+            },
+        },
+    )
+
+    for path_item in document.get("paths", {}).values():
+        for operation in path_item.values():
+            if not isinstance(operation, dict) or not operation.get("operationId"):
+                continue
+            spec = API_OPERATION_SPECS.get(str(operation["operationId"]))
+            if not spec or not spec.idempotency_required:
+                continue
+            operation_parameters = operation.setdefault("parameters", [])
+            if not _has_idempotency_header(operation_parameters):
+                operation_parameters.append({"$ref": IDEMPOTENCY_KEY_PARAMETER_REF})
+
+    return document
+
+
 class CompassNinjaAPI(NinjaAPI):
     """Ninja API with the repository-wide OpenAPI error contract applied."""
 
@@ -93,4 +143,5 @@ class CompassNinjaAPI(NinjaAPI):
             path_prefix=path_prefix,
             path_params=path_params,
         )
-        return add_common_error_responses(document)
+        add_common_error_responses(document)
+        return add_idempotency_key_parameters(document)

@@ -34,7 +34,6 @@ class RequestMetadata:
     ip_address: str = ""
     user_agent: str = ""
     session_key: str = ""
-    captcha_response: str = ""
 
 
 @dataclass(frozen=True, slots=True)
