@@ -78,6 +78,7 @@ class LoginChallengeSchema(Schema):
     pending_nonce: str
     expires_in: int
     requires_verification: bool
+    trusted_device_eligible: bool
 
 
 class MeSchema(Schema):

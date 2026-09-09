@@ -30,7 +30,10 @@ from apps.account_security.models import (
     TwoStepChallenge,
 )
 from apps.account_security.network import classify_network_class
-from apps.account_security.policies import is_2fa_required_for_user
+from apps.account_security.policies import (
+    get_trusted_device_duration_days,
+    is_2fa_required_for_user,
+)
 from apps.account_security.services import create_twostep_challenge, verify_otp
 from apps.account_security.tokens import get_safe_user_agent_summary, hash_identifier, hash_token
 from apps.common.contracts import RequestMetadata
@@ -104,6 +107,7 @@ class LoginChallenge:
     challenge_id: uuid.UUID
     pending_nonce: str
     expires_at: object
+    trusted_device_eligible: bool = False
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -111,6 +115,7 @@ class LoginChallenge:
             "pending_nonce": self.pending_nonce,
             "expires_in": max(0, int((self.expires_at - timezone.now()).total_seconds())),
             "requires_verification": True,
+            "trusted_device_eligible": self.trusted_device_eligible is True,
         }
 
 
@@ -728,6 +733,7 @@ def begin_password_login(
             challenge_id=challenge.id,
             pending_nonce=pending_nonce,
             expires_at=challenge.expires_at,
+            trusted_device_eligible=get_trusted_device_duration_days(user) > 0,
         )
 
     pair = issue_token_pair(user, ip=ip, user_agent=user_agent, assurance_verified=False)

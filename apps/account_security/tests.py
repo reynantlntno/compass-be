@@ -240,7 +240,31 @@ class ApiFoundationTests(TestCase):
 
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.json()["requires_verification"], True)
+        self.assertFalse(response.json()["trusted_device_eligible"])
         self.assertEqual(ApiToken.objects.filter(user=internal).count(), 0)
+
+    @patch("apps.account_security.api_tokens.create_twostep_challenge")
+    def test_eligible_internal_login_exposes_trusted_device_eligibility(self, create_challenge):
+        internal = User.objects.create_user(
+            email="counselor@example.test",
+            password=self.password,
+            first_name="Guidance",
+            last_name="Counselor",
+            role=RoleChoices.COUNSELOR,
+            is_active=True,
+        )
+        challenge = TwoStepChallenge(
+            id=uuid.uuid4(),
+            user=internal,
+            purpose="login",
+            expires_at=timezone.now() + timedelta(minutes=5),
+        )
+        create_challenge.return_value = (challenge, None)
+
+        response = self._login(email=internal.email, password=self.password)
+
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(response.json()["trusted_device_eligible"])
 
     @patch("apps.account_security.api_tokens.create_twostep_challenge")
     def test_internal_login_verification_issues_tokens_and_replay_is_rejected(

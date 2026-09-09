@@ -292,6 +292,26 @@ class AccountSecuritySessionAndTrustedDeviceTests(TestCase):
         self.assertIsInstance(outcome, LoginChallenge)
         self.assertTrue(outcome.pending_nonce)
 
+    @patch("apps.account_security.api_tokens.create_twostep_challenge")
+    def test_enabled_student_login_challenge_exposes_trusted_device_eligibility(self, create_challenge):
+        pending = TwoStepChallenge(
+            id=uuid.uuid4(),
+            user=self.student,
+            purpose="login",
+            expires_at=timezone.now() + timedelta(minutes=5),
+        )
+        create_challenge.return_value = (pending, None)
+
+        outcome = begin_password_login(
+            self.student.email,
+            self.password,
+            RequestMetadata(ip_address="8.8.8.8", user_agent=UA),
+        )
+
+        self.assertIsInstance(outcome, LoginChallenge)
+        self.assertTrue(outcome.trusted_device_eligible)
+        self.assertTrue(outcome.as_dict()["trusted_device_eligible"])
+
     @patch("apps.account_security.services.send_security_email", return_value="mail-id")
     def test_trusted_login_requires_fresh_step_up_otp(self, _send):
         challenge = self._verified_login_challenge()
