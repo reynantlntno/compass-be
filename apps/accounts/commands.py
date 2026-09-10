@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from apps.accounts.models import RoleChoices
+from apps.account_security.password_policy import PASSWORD_MAX_LENGTH
 from apps.common.exceptions import ValidationError
 
 
@@ -28,7 +29,7 @@ def _bounded_text(value: object, *, label: str, maximum: int, required: bool = T
 
 
 def _bootstrap_password(value: object) -> str:
-    if type(value) is not str or not value or len(value) > 256:
+    if type(value) is not str or not value or len(value) > PASSWORD_MAX_LENGTH:
         raise ValidationError("The bootstrap password is invalid.")
     if any(character in value for character in ("\r", "\n", "\x00")):
         raise ValidationError("The bootstrap password is invalid.")

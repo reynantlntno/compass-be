@@ -37,6 +37,7 @@ from apps.account_security.policies import (
     can_user_recover_online,
     can_start_staff_assisted_recovery,
 )
+from apps.account_security.password_policy import validate_new_password
 from apps.account_security.audit import log_security_event
 from apps.account_security.assurance import ASSURANCE_CONTEXT, ASSURANCE_POLICY_VERSION
 from apps.account_security.assurance import validate_request_assurance
@@ -502,6 +503,11 @@ def reset_password_with_token(
         )
         record_abuse_failure(AbuseAction.RECOVERY_VERIFY, subject=request.identifier_hash, ip=ip, session=session, token=token, reason_code="RECOVERY_REQUEST_LOCKED")
         return False
+
+    # Resolve the account before the final policy check so recovery applies
+    # user-attribute similarity validation and rejects password reuse.  This
+    # runs before any password or security-state mutation.
+    validate_new_password(new_password, user=user, reject_reuse=True)
 
     # Update password and invalidate every prior authentication state.
     apply_password_reset_security_state(

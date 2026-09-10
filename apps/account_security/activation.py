@@ -17,11 +17,10 @@ from typing import Mapping, Protocol
 from urllib.parse import quote, urlsplit
 
 from django.conf import settings
-from django.contrib.auth.password_validation import validate_password
-from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core import signing
 from django.utils import timezone
 
+from apps.account_security.password_policy import validate_new_password
 from apps.common.exceptions import ValidationError
 
 
@@ -151,8 +150,8 @@ def validate_activation_password(password: str, confirmation: str, user) -> None
     if password != confirmation:
         raise ValidationError("Passwords do not match.")
     try:
-        validate_password(password, user=user)
-    except DjangoValidationError as exc:
+        validate_new_password(password, user=user)
+    except ValidationError as exc:
         raise ValidationError("The password does not meet the account requirements.") from exc
 
 

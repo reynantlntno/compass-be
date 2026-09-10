@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import check_password
-from django.contrib.auth.password_validation import validate_password
 from django.db import transaction
 from django.utils import timezone
 
@@ -23,6 +22,7 @@ from apps.account_security.commands import (
     StaffAssistedRecoveryCommand,
 )
 from apps.account_security.models import AccountRecoveryRequest, TwoStepChallenge
+from apps.account_security.password_policy import validate_new_password
 from apps.account_security.services import (
     apply_password_reset_security_state,
     request_recovery,
@@ -71,13 +71,7 @@ def change_password(*, actor, command: PasswordChangeCommand, ip: str = "", user
         raise PermissionDeniedError()
     if not check_password(command.current_password, user.password):
         raise InvalidCredentialsError()
-    try:
-        validate_password(command.new_password, user=user)
-    except ModelValidationError as exc:
-        messages = [str(message) for message in exc.messages[:5]]
-        raise ValidationError(field_errors={"new_password": messages}) from exc
-    if check_password(command.new_password, user.password):
-        raise ValidationError(field_errors={"new_password": ["The new password must be different."]})
+    validate_new_password(command.new_password, user=user, reject_reuse=True)
 
     apply_password_reset_security_state(
         user,
@@ -136,13 +130,7 @@ def recover_it_admin_password(
         or bool(user.is_superuser)
     ):
         raise PermissionDeniedError("The IT Admin recovery target is not eligible.")
-    if check_password(command.new_password, user.password):
-        raise ValidationError(field_errors={"new_password": ["The new password must be different."]})
-    try:
-        validate_password(command.new_password, user=user)
-    except ModelValidationError as exc:
-        messages = [str(message) for message in exc.messages[:5]]
-        raise ValidationError(field_errors={"new_password": messages}) from exc
+    validate_new_password(command.new_password, user=user, reject_reuse=True)
 
     now = timezone.now()
     AccountRecoveryRequest.objects.select_for_update().filter(
@@ -236,11 +224,10 @@ def reset_password(*, command: RecoveryResetCommand, ip: str = "", user_agent: s
     """Consume a recovery token at the public reset boundary."""
     if not isinstance(command, RecoveryResetCommand):
         raise ValidationError("A typed recovery-reset command is required.")
-    try:
-        validate_password(command.new_password)
-    except ModelValidationError as exc:
-        messages = [str(message) for message in exc.messages[:5]]
-        raise ValidationError(field_errors={"new_password": messages}) from exc
+    # Keep this pre-token check to preserve the existing public boundary: a
+    # malformed/weak request is rejected before any recovery token state is
+    # touched.  The token-resolved account is checked again in the service.
+    validate_new_password(command.new_password)
     try:
         completed = reset_password_with_token(
             command.token,
@@ -249,6 +236,8 @@ def reset_password(*, command: RecoveryResetCommand, ip: str = "", user_agent: s
             user_agent=user_agent,
             session=session,
         )
+    except ValidationError:
+        raise
     except (ModelValidationError, ValueError) as exc:
         raise ValidationError() from exc
     except Exception as exc:
