@@ -468,7 +468,8 @@ class ApiOperationRegistryTests(SimpleTestCase):
             "notifications_list", "notifications_unread_count", "notifications_detail",
             "notifications_preferences_catalog", "notifications_preferences_list",
             "notifications_delivery_list", "notifications_delivery_detail",
-            "notifications_read", "notifications_archive", "notifications_preference_update",
+            "notifications_read", "notifications_archive", "notifications_archive_bulk",
+            "notifications_preference_update",
             "notifications_delivery_retry", "notifications_delivery_dead_letter",
             "imports_list", "imports_catalog", "imports_detail", "imports_preview",
             "imports_invitation_list", "imports_invitation_detail", "imports_create",
@@ -920,6 +921,7 @@ class ApiResponseDocumentationTests(SimpleTestCase):
             "authority_scope_options": ("/api/v1/authority/scope-options/", "get"),
             "authority_grantees": ("/api/v1/authority/grantees/", "get"),
             "authority_account_grants": ("/api/v1/authority/accounts/{user_id}/grants/", "get"),
+            "authority_me_coverage": ("/api/v1/authority/me/coverage/", "get"),
             "staff_accounts_list": ("/api/v1/staff-accounts/", "get"),
             "appointments_list": ("/api/v1/appointments/", "get"),
             "appointments_available_slots": ("/api/v1/appointments/slots/", "get"),
@@ -1020,7 +1022,7 @@ class ApiResponseDocumentationTests(SimpleTestCase):
                 >= {"page", "page_size"}
             )
 
-        self.assertEqual(len(expected_paths), 79)
+        self.assertEqual(len(expected_paths), 80)
         self.assertEqual(
             {
                 operation_id

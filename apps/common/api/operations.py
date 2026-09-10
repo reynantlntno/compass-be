@@ -707,6 +707,7 @@ def _register_notification_operations() -> None:
     for operation_id in (
         "notifications_read",
         "notifications_archive",
+        "notifications_archive_bulk",
         "notifications_preference_update",
     ):
         API_OPERATION_SPECS[operation_id] = ApiOperationSpec(

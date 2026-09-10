@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
+from uuid import UUID
 
 from apps.common.exceptions import ValidationError
 
@@ -37,6 +38,40 @@ class NotificationArchiveCommand:
     def __post_init__(self) -> None:
         if self.expected_status is not None and self.expected_status not in {"unread", "read", "archived"}:
             raise ValidationError(field_errors={"expected_status": ["Invalid notification status."]})
+
+
+@dataclass(frozen=True, slots=True)
+class NotificationBulkArchiveItemCommand:
+    """One owned notification and the status observed by the client."""
+
+    notification_id: UUID
+    expected_status: str
+
+    def __post_init__(self) -> None:
+        try:
+            object.__setattr__(self, "notification_id", UUID(str(self.notification_id)))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ValidationError(field_errors={"notification_id": ["Invalid notification identifier."]}) from exc
+        if not isinstance(self.expected_status, str) or self.expected_status not in {"unread", "read"}:
+            raise ValidationError(field_errors={"expected_status": ["Invalid notification status."]})
+
+
+@dataclass(frozen=True, slots=True)
+class NotificationBulkArchiveCommand:
+    """Archives a bounded set of owned notifications atomically."""
+
+    items: tuple[NotificationBulkArchiveItemCommand, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.items, tuple):
+            object.__setattr__(self, "items", tuple(self.items or ()))
+        if not self.items or len(self.items) > 100:
+            raise ValidationError(field_errors={"items": ["Select between 1 and 100 notifications."]})
+        if any(not isinstance(item, NotificationBulkArchiveItemCommand) for item in self.items):
+            raise ValidationError(field_errors={"items": ["Invalid notification selection."]})
+        identifiers = [item.notification_id for item in self.items]
+        if len(set(identifiers)) != len(identifiers):
+            raise ValidationError(field_errors={"items": ["A notification cannot be selected more than once."]})
 
 
 @dataclass(frozen=True, slots=True)

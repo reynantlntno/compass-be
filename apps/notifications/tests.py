@@ -2,6 +2,7 @@ from datetime import timedelta
 from dataclasses import FrozenInstanceError
 from io import StringIO
 from unittest.mock import patch
+from uuid import uuid4
 
 from django.core.management import call_command, get_commands
 from django.test import Client, TestCase
@@ -15,6 +16,8 @@ from apps.notifications.commands import (
     EmailDeliveryDeadLetterCommand,
     EmailDeliveryRetryCommand,
     NotificationArchiveCommand,
+    NotificationBulkArchiveCommand,
+    NotificationBulkArchiveItemCommand,
     NotificationPreferenceUpdateCommand,
     NotificationReadCommand,
 )
@@ -23,6 +26,7 @@ from apps.notifications.policies import can_manage_preferences, can_read_notific
 from apps.notifications.selectors import get_user_notifications, get_user_preferences
 from apps.notifications.services import (
     archive_notification,
+    archive_notifications_bulk,
     mark_email_delivery_dead,
     mark_notification_read,
     retry_email_delivery,
@@ -243,6 +247,96 @@ class NotificationCommandAndServiceTests(TestCase):
                 command=NotificationReadCommand(expected_status="unread"),
             )
 
+    def test_bulk_archive_is_atomic_and_accepts_mixed_read_states(self):
+        read_notification = Notification.objects.create(
+            dedupe_key="notification-service-2",
+            recipient_user=self.owner,
+            notification_type="password_changed",
+            title="Password changed",
+            body_preview="Your password was changed.",
+            status="read",
+            read_at=timezone.now(),
+        )
+
+        archived = archive_notifications_bulk(
+            actor=self.owner,
+            command=NotificationBulkArchiveCommand(
+                items=(
+                    NotificationBulkArchiveItemCommand(
+                        notification_id=self.notification.pk,
+                        expected_status="unread",
+                    ),
+                    NotificationBulkArchiveItemCommand(
+                        notification_id=read_notification.pk,
+                        expected_status="read",
+                    ),
+                ),
+            ),
+        )
+
+        self.assertEqual([notification.pk for notification in archived], [self.notification.pk, read_notification.pk])
+        self.assertEqual(
+            set(Notification.objects.filter(pk__in=[self.notification.pk, read_notification.pk]).values_list("status", flat=True)),
+            {"archived"},
+        )
+
+    def test_bulk_archive_rejects_duplicates_and_more_than_one_hundred_items(self):
+        item = NotificationBulkArchiveItemCommand(
+            notification_id=self.notification.pk,
+            expected_status="unread",
+        )
+        with self.assertRaises(ValidationError):
+            NotificationBulkArchiveCommand(items=(item, item))
+        with self.assertRaises(ValidationError):
+            NotificationBulkArchiveCommand(
+                items=tuple(
+                    NotificationBulkArchiveItemCommand(notification_id=uuid4(), expected_status="unread")
+                    for _ in range(101)
+                ),
+            )
+
+    def test_bulk_archive_conflict_and_non_owner_are_all_or_nothing(self):
+        stale = Notification.objects.create(
+            dedupe_key="notification-service-3",
+            recipient_user=self.owner,
+            notification_type="password_changed",
+            title="Password changed",
+            body_preview="Your password was changed.",
+            status="read",
+            read_at=timezone.now(),
+        )
+        with self.assertRaises(LifecycleConflictError):
+            archive_notifications_bulk(
+                actor=self.owner,
+                command=NotificationBulkArchiveCommand(
+                    items=(
+                        NotificationBulkArchiveItemCommand(self.notification.pk, "unread"),
+                        NotificationBulkArchiveItemCommand(stale.pk, "unread"),
+                    ),
+                ),
+            )
+        self.assertEqual(Notification.objects.get(pk=self.notification.pk).status, "unread")
+        self.assertEqual(Notification.objects.get(pk=stale.pk).status, "read")
+
+        foreign = Notification.objects.create(
+            dedupe_key="notification-service-4",
+            recipient_user=self.other,
+            notification_type="password_changed",
+            title="Other account update",
+            body_preview="This belongs to another account.",
+        )
+        with self.assertRaises(NotFoundError):
+            archive_notifications_bulk(
+                actor=self.owner,
+                command=NotificationBulkArchiveCommand(
+                    items=(
+                        NotificationBulkArchiveItemCommand(self.notification.pk, "unread"),
+                        NotificationBulkArchiveItemCommand(foreign.pk, "unread"),
+                    ),
+                ),
+            )
+        self.assertEqual(Notification.objects.get(pk=self.notification.pk).status, "unread")
+
     def test_preferences_are_catalog_bound_and_mandatory_security_cannot_be_disabled(self):
         preference = update_notification_preference(
             actor=self.owner,
@@ -346,6 +440,125 @@ class NotificationApiTests(TestCase):
         self.student.save(update_fields=["is_active"])
         response = self.client.get("/api/v1/notifications/", **self.headers(self.student_token))
         self.assertIn(response.status_code, {401, 403})
+
+    def test_bulk_archive_is_atomic_changes_unread_count_and_replays_idempotently(self):
+        read_notification = Notification.objects.create(
+            dedupe_key="notification-api-2",
+            recipient_user=self.student,
+            notification_type="password_changed",
+            title="Password changed",
+            body_preview="Your password was changed.",
+            status="read",
+            read_at=timezone.now(),
+        )
+        payload = {
+            "items": [
+                {"notification_id": str(self.notification.pk), "expected_status": "unread"},
+                {"notification_id": str(read_notification.pk), "expected_status": "read"},
+            ],
+        }
+        response = self.client.post(
+            "/api/v1/notifications/bulk/archive/",
+            data=payload,
+            content_type="application/json",
+            **self.headers(self.student_token, "notification-bulk-archive-1"),
+        )
+        replay = self.client.post(
+            "/api/v1/notifications/bulk/archive/",
+            data=payload,
+            content_type="application/json",
+            **self.headers(self.student_token, "notification-bulk-archive-1"),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["count"], 2)
+        self.assertEqual([item["status"] for item in response.json()["items"]], ["archived", "archived"])
+        self.assertEqual(replay.status_code, 200)
+        self.assertEqual(replay.json(), response.json())
+        self.assertEqual(
+            Notification.objects.filter(recipient_user=self.student, status="unread").count(),
+            0,
+        )
+        unread = self.client.get(
+            "/api/v1/notifications/unread-count/",
+            **self.headers(self.student_token),
+        )
+        self.assertEqual(unread.status_code, 200)
+        self.assertEqual(unread.json()["unread_count"], 0)
+
+    def test_bulk_archive_conflict_and_ownership_fail_without_partial_changes(self):
+        stale = Notification.objects.create(
+            dedupe_key="notification-api-3",
+            recipient_user=self.student,
+            notification_type="password_changed",
+            title="Password changed",
+            body_preview="Your password was changed.",
+            status="read",
+            read_at=timezone.now(),
+        )
+        conflict = self.client.post(
+            "/api/v1/notifications/bulk/archive/",
+            data={
+                "items": [
+                    {"notification_id": str(self.notification.pk), "expected_status": "unread"},
+                    {"notification_id": str(stale.pk), "expected_status": "unread"},
+                ],
+            },
+            content_type="application/json",
+            **self.headers(self.student_token, "notification-bulk-archive-conflict"),
+        )
+        self.assertEqual(conflict.status_code, 409)
+        self.assertEqual(Notification.objects.get(pk=self.notification.pk).status, "unread")
+        self.assertEqual(Notification.objects.get(pk=stale.pk).status, "read")
+
+        foreign = Notification.objects.create(
+            dedupe_key="notification-api-4",
+            recipient_user=self.other,
+            notification_type="password_changed",
+            title="Other account update",
+            body_preview="This belongs to another account.",
+        )
+        not_found = self.client.post(
+            "/api/v1/notifications/bulk/archive/",
+            data={
+                "items": [
+                    {"notification_id": str(self.notification.pk), "expected_status": "unread"},
+                    {"notification_id": str(foreign.pk), "expected_status": "unread"},
+                ],
+            },
+            content_type="application/json",
+            **self.headers(self.student_token, "notification-bulk-archive-owner"),
+        )
+        self.assertEqual(not_found.status_code, 404)
+        self.assertEqual(Notification.objects.get(pk=self.notification.pk).status, "unread")
+
+    def test_bulk_archive_rejects_duplicate_and_over_limit_payloads(self):
+        duplicate = self.client.post(
+            "/api/v1/notifications/bulk/archive/",
+            data={
+                "items": [
+                    {"notification_id": str(self.notification.pk), "expected_status": "unread"},
+                    {"notification_id": str(self.notification.pk), "expected_status": "unread"},
+                ],
+            },
+            content_type="application/json",
+            **self.headers(self.student_token, "notification-bulk-archive-duplicate"),
+        )
+        self.assertEqual(duplicate.status_code, 422)
+        self.assertEqual(Notification.objects.get(pk=self.notification.pk).status, "unread")
+
+        over_limit = self.client.post(
+            "/api/v1/notifications/bulk/archive/",
+            data={
+                "items": [
+                    {"notification_id": str(uuid4()), "expected_status": "unread"}
+                    for _ in range(101)
+                ],
+            },
+            content_type="application/json",
+            **self.headers(self.student_token, "notification-bulk-archive-limit"),
+        )
+        self.assertEqual(over_limit.status_code, 422)
 
     def test_preferences_expose_catalog_and_reject_mandatory_disable(self):
         catalog = self.client.get(

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
-from ninja import Query, Router, Schema
+from ninja import Field, Query, Router, Schema
 
 from apps.access_control.authority import has_fixed_capability
 from apps.access_control.capabilities import Capability
@@ -22,9 +23,12 @@ from apps.notifications.commands import (
     EmailDeliveryDeadLetterCommand,
     EmailDeliveryRetryCommand,
     NotificationArchiveCommand,
+    NotificationBulkArchiveCommand,
+    NotificationBulkArchiveItemCommand,
     NotificationPreferenceUpdateCommand,
     NotificationReadCommand,
 )
+from apps.notifications.models import Notification
 from apps.notifications.projections import (
     notification_preference_projection,
     notification_projection,
@@ -42,6 +46,7 @@ from apps.notifications.queries import (
 )
 from apps.notifications.services import (
     archive_notification,
+    archive_notifications_bulk,
     mark_email_delivery_dead,
     mark_notification_read,
     retry_email_delivery,
@@ -95,6 +100,15 @@ class NotificationStatusSchema(Schema):
     expected_status: str | None = None
 
 
+class NotificationBulkArchiveItemSchema(Schema):
+    notification_id: UUID
+    expected_status: Literal["unread", "read"]
+
+
+class NotificationBulkArchiveSchema(Schema):
+    items: list[NotificationBulkArchiveItemSchema] = Field(..., min_length=1, max_length=100)
+
+
 class TechnicalDeliverySchema(Schema):
     id: str
     template_key: str
@@ -116,6 +130,11 @@ class DeadLetterSchema(Schema):
 
 class NotificationPageSchema(PageResultSchema):
     items: list[NotificationSchema]
+
+
+class NotificationBulkArchiveResultSchema(Schema):
+    items: list[NotificationSchema] = Field(..., min_length=1, max_length=100)
+    count: int = Field(..., ge=1, le=100)
 
 
 class NotificationTypePageSchema(PageResultSchema):
@@ -160,6 +179,23 @@ def _run(request, operation_id, payload, operation, replay):
 def _notification_replay(actor, key):
     value = notification_detail(actor, key.related_object_id)
     return value or None
+
+
+def _notification_bulk_replay(actor, key):
+    ids = [str(value) for value in (key.metadata_json or {}).get("related_object_ids", [])]
+    if not ids:
+        return None
+    notifications = Notification.objects.filter(
+        recipient_user_id=actor.pk,
+        pk__in=ids,
+    )
+    by_id = {str(notification.pk): notification for notification in notifications}
+    if len(by_id) != len(ids):
+        return None
+    return {
+        "items": [notification_projection(by_id[notification_id]) for notification_id in ids],
+        "count": len(ids),
+    }
 
 
 def _preference_replay(actor, key):
@@ -295,6 +331,53 @@ def view_delivery_metadata(request, delivery_id: UUID):
     if value is None:
         raise NotFoundError()
     return value
+
+
+@router.post(
+    "/bulk/archive/",
+    response=NotificationBulkArchiveResultSchema,
+    operation_id="notifications_archive_bulk",
+)
+def archive_notifications_bulk_api(request, payload: NotificationBulkArchiveSchema):
+    actor = _actor(request)
+    command = NotificationBulkArchiveCommand(
+        items=tuple(
+            NotificationBulkArchiveItemCommand(
+                notification_id=item.notification_id,
+                expected_status=item.expected_status,
+            )
+            for item in payload.items
+        )
+    )
+    request_payload = {
+        "items": [
+            {
+                "notification_id": str(item.notification_id),
+                "expected_status": item.expected_status,
+            }
+            for item in command.items
+        ]
+    }
+
+    def execute():
+        notifications = archive_notifications_bulk(actor=actor, command=command)
+        return ApiMutationOutcome(
+            value={
+                "items": [notification_projection(notification) for notification in notifications],
+                "count": len(notifications),
+            },
+            related_object=notifications[0],
+            related_object_ids=tuple(str(notification.pk) for notification in notifications),
+            safe_response_path="/api/v1/notifications/bulk/archive/",
+        )
+
+    return _run(
+        request,
+        "notifications_archive_bulk",
+        request_payload,
+        execute,
+        lambda key: _notification_bulk_replay(actor, key),
+    )
 
 
 @router.get("/{notification_id}/", response=NotificationSchema, operation_id="notifications_detail")

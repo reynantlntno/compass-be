@@ -18,6 +18,7 @@ from apps.notifications.commands import (
     EmailDeliveryDeadLetterCommand,
     EmailDeliveryRetryCommand,
     NotificationArchiveCommand,
+    NotificationBulkArchiveCommand,
     NotificationPreferenceUpdateCommand,
     NotificationReadCommand,
 )
@@ -221,6 +222,45 @@ def archive_notification(*, actor, notification_id, command: NotificationArchive
             source_app="notifications",
         )
     return notification
+
+
+@transaction.atomic
+def archive_notifications_bulk(*, actor, command: NotificationBulkArchiveCommand) -> tuple[Notification, ...]:
+    """Archive owned notifications as one all-or-nothing state transition."""
+    if not isinstance(command, NotificationBulkArchiveCommand):
+        raise ValidationError("Bulk notification archive requires a typed command.")
+    if not is_active_nonlegacy_actor(actor):
+        raise PermissionDeniedError()
+
+    requested_ids = tuple(item.notification_id for item in command.items)
+    locked_rows = list(
+        Notification.objects.select_for_update()
+        .filter(recipient_user_id=actor.pk, pk__in=requested_ids)
+        .order_by("pk")
+    )
+    if len(locked_rows) != len(requested_ids):
+        raise NotFoundError()
+
+    by_id = {notification.pk: notification for notification in locked_rows}
+    selected = tuple(by_id[item.notification_id] for item in command.items)
+    for item, notification in zip(command.items, selected):
+        if notification.status != item.expected_status:
+            raise LifecycleConflictError()
+
+    archived_at = timezone.now()
+    for notification in selected:
+        notification.status = "archived"
+        notification.archived_at = archived_at
+        notification.save(update_fields=["status", "archived_at"])
+        audit_log(
+            action_type="NOTIFICATION_ARCHIVED",
+            event_category="NOTIFICATION",
+            target_model="notifications.Notification",
+            target_object_id=notification.id,
+            actor_user=actor,
+            source_app="notifications",
+        )
+    return selected
 
 
 @transaction.atomic

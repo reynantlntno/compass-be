@@ -580,8 +580,11 @@ def rotate_refresh_token(
     invalid_reason = "refresh_invalidated"
     with transaction.atomic():
         token = (
-            ApiToken.objects.select_for_update()
-            .select_related("user", "session")
+            # ApiToken.session is nullable for legacy token rows.  Lock only
+            # the token row so PostgreSQL does not try to apply FOR UPDATE to
+            # the nullable side of the select_related() outer join.
+            ApiToken.objects.select_related("user", "session")
+            .select_for_update(of=("self",))
             .filter(token_hash=hash_token(raw_refresh_token), token_type=ApiTokenTypeChoices.REFRESH)
             .first()
         )
