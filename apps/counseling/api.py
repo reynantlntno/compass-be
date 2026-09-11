@@ -163,9 +163,110 @@ class RoutineInterviewProjectionSchema(Schema):
     academic_goals: str | None = None
     career_goals: str | None = None
 
+class RoutineInterviewSensitiveDetailSchema(Schema):
+    """Policy-gated routine detail without database or actor identifiers."""
+
+    session_reference_code: str
+    status: str
+    visit_date: date_type | None = None
+    visit_time: time_type | None = None
+    duration_minutes: int | None = None
+    nature_of_visit: str | None = None
+
+    concern_academic: bool | None = None
+    concern_friends: bool | None = None
+    concern_classmates: bool | None = None
+    concern_vices: bool | None = None
+    concern_love_life: bool | None = None
+    concern_sleeping_problems: bool | None = None
+    concern_family: bool | None = None
+    concern_financial: bool | None = None
+    concern_suicidal_thought: bool | None = None
+    concern_dorm_boarding_house: bool | None = None
+    concern_past_painful_experience: bool | None = None
+    concern_others: bool | None = None
+    concern_others_text: str | None = None
+
+    rating_emotionally: int | None = None
+    rating_academically: int | None = None
+    rating_physically: int | None = None
+    rating_socially: int | None = None
+    rating_spiritually: int | None = None
+    rating_financially: int | None = None
+    rating_others: int | None = None
+    rating_others_label: str | None = None
+    evaluation_date: date_type | None = None
+
+    submitted_at: datetime_type | None = None
+    evaluated_at: datetime_type | None = None
+    completed_at: datetime_type | None = None
+    finalized_at: datetime_type | None = None
+    locked_at: datetime_type | None = None
+    reopened_at: datetime_type | None = None
+
+    coping_challenges: str | None = None
+    coping_remarks: str | None = None
+    ucn_experience: str | None = None
+    reason_for_coming: str | None = None
+    difficulties_encountered: str | None = None
+    stress_anxiety_causes: str | None = None
+    stress_anxiety_management: str | None = None
+    family_background_notes: str | None = None
+    concerns_explanation: str | None = None
+    college_adjustment: str | None = None
+    academic_goals: str | None = None
+    career_goals: str | None = None
+    special_concern: str | None = None
+    recommendations: str | None = None
+
+
+class RoutineInterviewQueueProjectionSchema(Schema):
+    """Safe staff queue projection without database or counselor identifiers."""
+
+    session_reference_code: str
+    status: str
+    visit_date: date_type | None = None
+    visit_time: time_type | None = None
+    duration_minutes: int | None = None
+    nature_of_visit: str | None = None
+
+    concern_academic: bool | None = None
+    concern_friends: bool | None = None
+    concern_classmates: bool | None = None
+    concern_vices: bool | None = None
+    concern_love_life: bool | None = None
+    concern_sleeping_problems: bool | None = None
+    concern_family: bool | None = None
+    concern_financial: bool | None = None
+    concern_suicidal_thought: bool | None = None
+    concern_dorm_boarding_house: bool | None = None
+    concern_past_painful_experience: bool | None = None
+    concern_others: bool | None = None
+
+    rating_emotionally: int | None = None
+    rating_academically: int | None = None
+    rating_physically: int | None = None
+    rating_socially: int | None = None
+    rating_spiritually: int | None = None
+    rating_financially: int | None = None
+    rating_others: int | None = None
+    evaluation_date: date_type | None = None
+
+    submitted_at: datetime_type | None = None
+    evaluated_at: datetime_type | None = None
+    completed_at: datetime_type | None = None
+    finalized_at: datetime_type | None = None
+    locked_at: datetime_type | None = None
+    reopened_at: datetime_type | None = None
+
+    student_display_name: str | None = None
+    student_number: str | None = None
+    assignment_state: str | None = None
+    updated_at: datetime_type | None = None
+
 
 class RoutineInterviewPageSchema(PageResultSchema):
-    items: list[RoutineInterviewProjectionSchema]
+    items: list[RoutineInterviewQueueProjectionSchema]
 
 
 class CounselingCaseProjectionSchema(Schema):
@@ -986,13 +1087,31 @@ def list_routine_interviews(
 ):
     prepare_api_operation(request, "counseling_routine_interviews_list")
     try:
-        return counseling_queries.get_routine_interview_metadata_page(
+        return counseling_queries.get_routine_interview_queue_metadata_page(
             _actor(request),
             _page(page, page_size),
             statuses=status,
         ).as_dict()
     except ValueError as error:
         raise ValidationError(field_errors={"filters": ["Invalid routine interview filters."]}) from error
+
+
+@router.get(
+    "/routine-interviews/{reference_code}/sensitive/",
+    response=RoutineInterviewSensitiveDetailSchema,
+    exclude_unset=True,
+    operation_id="counseling_routine_interview_sensitive_detail",
+)
+def routine_interview_sensitive_detail(request, reference_code: str):
+    from apps.counseling.projections import project_routine_interview_api_sensitive_detail
+
+    prepare_api_operation(request, "counseling_routine_interview_sensitive_detail")
+    actor = _actor(request)
+    record = _routine_record_or_404(actor, reference_code)
+    payload = project_routine_interview_api_sensitive_detail(actor, record)
+    if payload is None:
+        raise NotFoundError()
+    return payload
 
 
 @router.get(

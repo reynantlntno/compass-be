@@ -376,7 +376,8 @@ class ApiOperationRegistryTests(SimpleTestCase):
             "appointments_office_closure_update", "appointments_office_closure_deactivate",
             "counseling_sessions_list", "counseling_session_detail",
             "counseling_session_summary", "counseling_routine_interviews_list",
-            "counseling_routine_interview_detail", "counseling_cases_list",
+            "counseling_routine_interview_detail", "counseling_routine_interview_sensitive_detail",
+            "counseling_cases_list",
             "counseling_case_detail", "counseling_urgent_list", "counseling_urgent_detail",
             "counseling_ecounseling_detail",
             "counseling_session_create", "counseling_session_start", "counseling_note_save",
@@ -1886,8 +1887,8 @@ class CounselingResponseDocumentationTests(SimpleTestCase):
             if operation_id.startswith("counseling_")
         }
         json_ids = counseling_ids - binary_ids
-        self.assertEqual(len(counseling_ids), 66)
-        self.assertEqual(len(json_ids), 62)
+        self.assertEqual(len(counseling_ids), 67)
+        self.assertEqual(len(json_ids), 63)
 
         explicit = {
             "counseling_sessions_list": "CounselingSessionPageSchema",
@@ -1895,6 +1896,7 @@ class CounselingResponseDocumentationTests(SimpleTestCase):
             "counseling_session_summary": "CounselingStudentSummarySchema",
             "counseling_routine_interviews_list": "RoutineInterviewPageSchema",
             "counseling_routine_interview_detail": "RoutineInterviewProjectionSchema",
+            "counseling_routine_interview_sensitive_detail": "RoutineInterviewSensitiveDetailSchema",
             "counseling_routine_interviews_document_generate": "GeneratedDocumentMetadataSchema",
             "counseling_cases_list": "CounselingCasePageSchema",
             "counseling_case_detail": "CounselingCaseProjectionSchema",
@@ -1933,7 +1935,7 @@ class CounselingResponseDocumentationTests(SimpleTestCase):
         components = document["components"]["schemas"]
         page_items = {
             "CounselingSessionPageSchema": "CounselingSessionProjectionSchema",
-            "RoutineInterviewPageSchema": "RoutineInterviewProjectionSchema",
+            "RoutineInterviewPageSchema": "RoutineInterviewQueueProjectionSchema",
             "CounselingCasePageSchema": "CounselingCaseProjectionSchema",
             "UrgentSupportPageSchema": "UrgentSupportProjectionSchema",
         }

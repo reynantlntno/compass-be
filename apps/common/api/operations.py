@@ -263,6 +263,7 @@ def _register_counseling_operations():
         "counseling_session_summary",
         "counseling_routine_interviews_list",
         "counseling_routine_interview_detail",
+        "counseling_routine_interview_sensitive_detail",
         "counseling_cases_list",
         "counseling_case_detail",
         "counseling_urgent_list",

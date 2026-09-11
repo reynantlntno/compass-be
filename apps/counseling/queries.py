@@ -14,6 +14,7 @@ from apps.access_control.rules import is_student
 from apps.counseling.projections import (
     project_case_metadata,
     project_routine_interview_metadata,
+    project_routine_interview_queue_metadata,
     project_staff_session_queue_metadata,
     project_student_case_metadata,
     project_student_routine_interview,
@@ -224,6 +225,27 @@ def get_routine_interview_metadata_page(
     statuses=None,
 ) -> PageResult[dict]:
     projector = project_student_routine_interview if is_student(actor) else project_routine_interview_metadata
+    queryset = get_routine_interviews_visible_to(actor).order_by("-updated_at", "-pk")
+    parsed_statuses = _parse_values(statuses, ROUTINE_STATUSES, "routine interview status")
+    if parsed_statuses:
+        queryset = queryset.filter(status__in=parsed_statuses)
+    return _page_from_dict(
+        page_queryset(queryset, page or PageRequest(), lambda row: projector(actor, row))
+    )
+
+
+def get_routine_interview_queue_metadata_page(
+    actor,
+    page: PageRequest | None = None,
+    *,
+    statuses=None,
+) -> PageResult[dict]:
+    """Return the bounded staff queue projection for routine interviews."""
+    projector = (
+        project_student_routine_interview
+        if is_student(actor)
+        else project_routine_interview_queue_metadata
+    )
     queryset = get_routine_interviews_visible_to(actor).order_by("-updated_at", "-pk")
     parsed_statuses = _parse_values(statuses, ROUTINE_STATUSES, "routine interview status")
     if parsed_statuses:

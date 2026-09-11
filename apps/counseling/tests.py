@@ -154,9 +154,13 @@ from apps.counseling.projections import (
     project_student_case_metadata,
     project_counselor_note,
     ROUTINE_SENSITIVE_DETAIL_FIELDS,
+    ROUTINE_API_SENSITIVE_DETAIL_FIELDS,
+    ROUTINE_QUEUE_METADATA_FIELDS,
     ROUTINE_STAFF_METADATA_FIELDS,
     ROUTINE_STUDENT_INTAKE_FIELDS,
     project_routine_interview_metadata,
+    project_routine_interview_api_sensitive_detail,
+    project_routine_interview_queue_metadata,
     project_routine_interview_sensitive_detail,
     project_student_routine_interview,
 )
@@ -1681,6 +1685,35 @@ class RoutineEvaluationReadBoundaryTests(TestCase):
                 self.assertNotIn("special_concern", payload)
                 self.assertNotIn("recommendations", payload)
                 self.assertEqual(payload["rating_emotionally"], 7)
+
+    def test_queue_projection_adds_bounded_display_fields_without_identifiers(self):
+        payload = project_routine_interview_queue_metadata(
+            self.assigned_counselor,
+            self.assigned_record,
+        )
+
+        self.assertIsNotNone(payload)
+        self._assert_json_plain(
+            payload,
+            (*ROUTINE_QUEUE_METADATA_FIELDS, "student_display_name", "student_number", "assignment_state", "updated_at"),
+        )
+        self.assertNotIn("student_id", payload)
+        self.assertNotIn("assigned_counselor_id", payload)
+        self.assertEqual(payload["student_display_name"], "Test User")
+        self.assertEqual(payload["assignment_state"], "Assigned to you")
+
+    def test_api_sensitive_projection_excludes_identifiers_and_encrypted_fields(self):
+        payload = project_routine_interview_api_sensitive_detail(
+            self.assigned_counselor,
+            self.assigned_record,
+        )
+
+        self.assertIsNotNone(payload)
+        self._assert_json_plain(payload, ROUTINE_API_SENSITIVE_DETAIL_FIELDS)
+        self.assertNotIn("student_id", payload)
+        self.assertNotIn("assigned_counselor_id", payload)
+        self.assertEqual(payload["special_concern"], "private special concern")
+        self.assertEqual(payload["recommendations"], "private recommendation")
 
     def test_student_projection_contains_intake_only(self):
         payload = project_student_routine_interview(self.student, self.assigned_record)

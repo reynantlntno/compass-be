@@ -205,6 +205,18 @@ ROUTINE_SENSITIVE_DETAIL_FIELDS = (
     "recommendations",
 )
 
+ROUTINE_QUEUE_METADATA_FIELDS = tuple(
+    field
+    for field in ROUTINE_STAFF_METADATA_FIELDS
+    if field not in {"student_id", "assigned_counselor_id"}
+)
+
+ROUTINE_API_SENSITIVE_DETAIL_FIELDS = tuple(
+    field
+    for field in ROUTINE_SENSITIVE_DETAIL_FIELDS
+    if field not in {"student_id", "assigned_counselor_id"}
+)
+
 
 def _student_owner_can_view(actor, session) -> bool:
     """Return whether ``actor`` is the active student who owns ``session``."""
@@ -372,6 +384,44 @@ def project_routine_interview_metadata(actor, record) -> dict | None:
     return _project_routine_model_fields(record, ROUTINE_STAFF_METADATA_FIELDS)
 
 
+def project_routine_interview_queue_metadata(actor, record) -> dict | None:
+    """Return the bounded staff queue projection for routine interviews.
+
+    The established routine metadata projection is intentionally retained for
+    internal consumers.  Queue responses use this narrower presentation
+    projection so database and counselor identifiers never cross the API
+    boundary, while still exposing the same safe structured interview facts.
+    """
+    from apps.access_control.display import safe_student_display_label
+
+    existing_payload = project_routine_interview_metadata(actor, record)
+    if existing_payload is None:
+        return None
+    session = record.session
+    student = getattr(session, "student", None)
+    profile = getattr(student, "student_profile", None)
+    student_number = getattr(profile, "student_number", None)
+    payload = {
+        field: existing_payload[field]
+        for field in ROUTINE_QUEUE_METADATA_FIELDS
+    }
+    payload.update(
+        {
+            "student_display_name": safe_student_display_label(profile)[:160],
+            "student_number": str(student_number)[:50] if student_number is not None else None,
+            "assignment_state": (
+                "Unassigned"
+                if session.assigned_counselor_id is None
+                else "Assigned to you"
+                if session.assigned_counselor_id == getattr(actor, "pk", None)
+                else "Assigned"
+            ),
+            "updated_at": _json_safe(record.updated_at),
+        }
+    )
+    return payload
+
+
 def project_student_routine_interview(actor, record) -> dict | None:
     """Return the owner-only routine intake projection."""
     if not _student_routine_owner_can_view(actor, record):
@@ -407,6 +457,22 @@ def project_routine_interview_sensitive_detail(actor, record) -> dict | None:
     return payload
 
 
+def project_routine_interview_api_sensitive_detail(actor, record) -> dict | None:
+    """Return only the approved API-safe sensitive routine fields.
+
+    ``project_routine_interview_sensitive_detail`` remains the internal
+    decryption and authorization boundary.  This wrapper removes database and
+    actor identifiers before the dedicated API operation serializes it.
+    """
+    payload = project_routine_interview_sensitive_detail(actor, record)
+    if payload is None:
+        return None
+    return {
+        field: payload[field]
+        for field in ROUTINE_API_SENSITIVE_DETAIL_FIELDS
+    }
+
+
 if set(STAFF_SESSION_METADATA_FIELDS) & set(SESSION_CONFIDENTIAL_FIELDS):
     raise RuntimeError("Staff session metadata overlaps confidential session fields")
 if set(STUDENT_SESSION_METADATA_FIELDS) & set(SESSION_CONFIDENTIAL_FIELDS):
@@ -420,6 +486,8 @@ if set(ROUTINE_STAFF_METADATA_FIELDS) & set(ROUTINE_CONFIDENTIAL_FIELDS):
 for _routine_fields in (
     ROUTINE_STUDENT_INTAKE_FIELDS,
     ROUTINE_SENSITIVE_DETAIL_FIELDS,
+    ROUTINE_QUEUE_METADATA_FIELDS,
+    ROUTINE_API_SENSITIVE_DETAIL_FIELDS,
 ):
     if any(field.endswith("_encrypted") for field in _routine_fields):
         raise RuntimeError("Routine projection contains encrypted storage fields")

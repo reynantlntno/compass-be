@@ -22,7 +22,9 @@ from apps.counseling.api import (
     RecordingMutationResponseSchema,
     RecordingRunProjectionSchema,
     RecordingStatusSchema,
+    RoutineInterviewQueueProjectionSchema,
     RoutineInterviewProjectionSchema,
+    RoutineInterviewSensitiveDetailSchema,
     TranscriptMetadataSchema,
     TranscriptionStatusSchema,
     UrgentSupportProjectionSchema,
@@ -32,6 +34,7 @@ from apps.counseling.api import (
     recording_download_route,
     save_evaluation_route,
     save_intake_route,
+    routine_interview_sensitive_detail,
 )
 
 
@@ -120,6 +123,51 @@ class CounselingApiMutationWiringTests(SimpleTestCase):
         self.assertEqual(result.value, {"requested": True})
 
 
+class CounselingApiRoutineInterviewReadTests(SimpleTestCase):
+    """Sensitive routine details stay behind the scoped read operation."""
+
+    @patch("apps.counseling.projections.project_routine_interview_api_sensitive_detail")
+    @patch("apps.counseling.api._routine_record_or_404")
+    @patch("apps.counseling.api.prepare_api_operation")
+    def test_sensitive_detail_returns_the_bounded_projection(
+        self,
+        prepare_operation,
+        get_record,
+        project_detail,
+    ):
+        request = _request()
+        record = object()
+        payload = {
+            "session_reference_code": "SES-AY2627-000002",
+            "status": "EVALUATION_DRAFT",
+            "special_concern": "bounded detail",
+        }
+        get_record.return_value = record
+        project_detail.return_value = payload
+
+        result = routine_interview_sensitive_detail(request, "SES-AY2627-000002")
+
+        prepare_operation.assert_called_once_with(
+            request,
+            "counseling_routine_interview_sensitive_detail",
+        )
+        get_record.assert_called_once_with(request.auth.user, "SES-AY2627-000002")
+        project_detail.assert_called_once_with(request.auth.user, record)
+        self.assertEqual(result, payload)
+
+    @patch("apps.counseling.projections.project_routine_interview_api_sensitive_detail", return_value=None)
+    @patch("apps.counseling.api._routine_record_or_404", return_value=object())
+    @patch("apps.counseling.api.prepare_api_operation")
+    def test_sensitive_detail_uses_safe_not_found_for_denied_projection(
+        self,
+        _prepare_operation,
+        _get_record,
+        _project_detail,
+    ):
+        with self.assertRaises(NotFoundError):
+            routine_interview_sensitive_detail(_request(), "SES-AY2627-000002")
+
+
 class CounselingOutputSchemaTests(SimpleTestCase):
     """Response schemas preserve the domain projections and replay shapes."""
 
@@ -192,6 +240,25 @@ class CounselingOutputSchemaTests(SimpleTestCase):
         self.assertNotIn("student_id", student.dict(exclude_unset=True))
         self.assertNotIn("special_concern", RoutineInterviewProjectionSchema.__annotations__)
         self.assertNotIn("recommendations", RoutineInterviewProjectionSchema.__annotations__)
+
+        queue = RoutineInterviewQueueProjectionSchema(
+            session_reference_code="SES-AY2627-000002",
+            status="INTAKE_SUBMITTED",
+            student_display_name="Test User",
+            student_number="20260001",
+            assignment_state="Assigned to you",
+            updated_at="2026-08-24T10:00:00+08:00",
+        )
+        sensitive = RoutineInterviewSensitiveDetailSchema(
+            session_reference_code="SES-AY2627-000002",
+            status="EVALUATION_DRAFT",
+            special_concern="bounded detail",
+            recommendations="bounded recommendation",
+        )
+        self.assertNotIn("student_id", queue.dict(exclude_unset=True))
+        self.assertNotIn("assigned_counselor_id", queue.dict(exclude_unset=True))
+        self.assertNotIn("student_id", RoutineInterviewSensitiveDetailSchema.__annotations__)
+        self.assertEqual(sensitive.special_concern, "bounded detail")
 
     def test_urgent_and_student_summary_outputs_are_explicit(self):
         urgent = UrgentSupportProjectionSchema(
