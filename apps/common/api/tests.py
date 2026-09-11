@@ -1898,7 +1898,7 @@ class CounselingResponseDocumentationTests(SimpleTestCase):
             "counseling_routine_interview_detail": "RoutineInterviewProjectionSchema",
             "counseling_routine_interview_sensitive_detail": "RoutineInterviewSensitiveDetailSchema",
             "counseling_routine_interviews_document_generate": "GeneratedDocumentMetadataSchema",
-            "counseling_cases_list": "CounselingCasePageSchema",
+            "counseling_cases_list": "CounselingCaseQueuePageSchema",
             "counseling_case_detail": "CounselingCaseProjectionSchema",
             "counseling_urgent_list": "UrgentSupportPageSchema",
             "counseling_urgent_detail": "UrgentSupportProjectionSchema",
@@ -1936,7 +1936,7 @@ class CounselingResponseDocumentationTests(SimpleTestCase):
         page_items = {
             "CounselingSessionPageSchema": "CounselingSessionProjectionSchema",
             "RoutineInterviewPageSchema": "RoutineInterviewQueueProjectionSchema",
-            "CounselingCasePageSchema": "CounselingCaseProjectionSchema",
+            "CounselingCaseQueuePageSchema": "CounselingCaseQueueProjectionSchema",
             "UrgentSupportPageSchema": "UrgentSupportProjectionSchema",
         }
         for page_schema, item_schema in page_items.items():

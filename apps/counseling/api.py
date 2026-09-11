@@ -285,8 +285,25 @@ class CounselingCaseProjectionSchema(Schema):
     reopened_at: datetime_type | None = None
 
 
-class CounselingCasePageSchema(PageResultSchema):
-    items: list[CounselingCaseProjectionSchema]
+class CounselingCaseQueueProjectionSchema(Schema):
+    """Safe staff queue projection without database or actor identifiers."""
+
+    reference_code: str
+    status: str
+    concern_category: str | None = None
+    priority: str | None = None
+    created_at: datetime_type | None = None
+    updated_at: datetime_type | None = None
+    resolved_at: datetime_type | None = None
+    closed_at: datetime_type | None = None
+    reopened_at: datetime_type | None = None
+    student_display_name: str | None = None
+    student_number: str | None = None
+    assignment_state: str | None = None
+
+
+class CounselingCaseQueuePageSchema(PageResultSchema):
+    items: list[CounselingCaseQueueProjectionSchema]
 
 
 class UrgentSupportProjectionSchema(Schema):
@@ -497,6 +514,10 @@ class CaseCreateSchema(Schema):
     assigned_counselor: int | None = None
     concern_category: str
     priority: str = ""
+
+
+class CaseReasonSchema(Schema):
+    reason_code: str
 
 
 class CollaboratorSchema(Schema):
@@ -1337,16 +1358,37 @@ def _case_outcome(case):
 
 @router.get(
     "/cases/",
-    response=CounselingCasePageSchema,
+    response=CounselingCaseQueuePageSchema,
     exclude_unset=True,
     operation_id="counseling_cases_list",
 )
-def list_cases(request, page: PageQuery, page_size: PageSizeQuery):
+def list_cases(
+    request,
+    page: PageQuery,
+    page_size: PageSizeQuery,
+    q: str | None = Query(default=None, max_length=120),
+    status: str | None = Query(default=None, max_length=400),
+    concern_category: str | None = Query(default=None, max_length=40),
+    priority: str | None = Query(default=None, max_length=20),
+    assignment: str = Query(default="all", max_length=20),
+    order: str = Query(default="recent", max_length=20),
+):
     prepare_api_operation(request, "counseling_cases_list")
-    return counseling_queries.get_counseling_case_metadata_page(
-        _actor(request),
-        _page(page, page_size),
-    ).as_dict()
+    try:
+        return counseling_queries.get_counseling_case_metadata_page(
+            _actor(request),
+            _page(page, page_size),
+            q=q,
+            statuses=status,
+            concern_category=concern_category,
+            priority=priority,
+            assignment=assignment,
+            order=order,
+        ).as_dict()
+    except ValueError as exc:
+        raise ValidationError(
+            field_errors={"filters": ["Invalid counseling case filters."]}
+        ) from exc
 
 
 @router.get(
@@ -1414,17 +1456,41 @@ def assign_case_route(request, reference_code: str, payload: AssignmentSchema):
 
 
 def _transition_action(operation_id, service_name):
+    takes_reason = service_name in {
+        "put_case_on_hold",
+        "close_counseling_case",
+        "reopen_counseling_case",
+    }
+
+    if takes_reason:
+        def route(request, reference_code: str, payload: CaseReasonSchema | None = None):
+            from apps.counseling import services as counseling_services
+
+            actor = _actor(request)
+            service = getattr(counseling_services, service_name)
+            command = CaseTransitionCommand(
+                reason_code=payload.reason_code if payload is not None else "",
+            )
+            return _run(
+                request,
+                operation_id,
+                _fingerprint_payload(reference_code=reference_code, command=command),
+                lambda: _case_outcome(service(actor, reference_code, command)),
+            )
+
+        return route
+
     def route(request, reference_code: str):
         from apps.counseling import services as counseling_services
 
         actor = _actor(request)
         service = getattr(counseling_services, service_name)
-        command = CaseTransitionCommand()
-        if service_name in {"put_case_on_hold", "close_counseling_case", "reopen_counseling_case"}:
-            operation = lambda: _case_outcome(service(actor, reference_code, command))
-        else:
-            operation = lambda: _case_outcome(service(actor, reference_code))
-        return _run(request, operation_id, _fingerprint_payload(reference_code=reference_code), operation)
+        return _run(
+            request,
+            operation_id,
+            _fingerprint_payload(reference_code=reference_code),
+            lambda: _case_outcome(service(actor, reference_code)),
+        )
 
     return route
 

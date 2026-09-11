@@ -13,6 +13,7 @@ from apps.common.contracts import PageRequest, PageResult, page_queryset, to_jso
 from apps.access_control.rules import is_student
 from apps.counseling.projections import (
     project_case_metadata,
+    project_case_queue_metadata,
     project_routine_interview_metadata,
     project_routine_interview_queue_metadata,
     project_staff_session_queue_metadata,
@@ -59,6 +60,32 @@ SESSION_SOURCES = frozenset({
 })
 SESSION_ASSIGNMENTS = frozenset({"all", "mine", "unassigned"})
 SESSION_ORDERS = frozenset({"recent", "upcoming"})
+CASE_STATUSES = frozenset({
+    "OPEN",
+    "MONITORING",
+    "FOLLOW_UP_PENDING",
+    "ON_HOLD",
+    "RESOLVED",
+    "CLOSED",
+    "REOPENED",
+})
+CASE_CONCERN_CATEGORIES = frozenset({
+    "ACADEMIC",
+    "PERSONAL",
+    "FAMILY",
+    "FINANCIAL",
+    "BEHAVIORAL",
+    "MENTAL_WELLNESS",
+    "ADJUSTMENT",
+    "CAREER",
+    "PEER_RELATIONSHIP",
+    "SUBSTANCE",
+    "DISCIPLINARY",
+    "OTHER",
+})
+CASE_PRIORITIES = frozenset({"LOW", "MEDIUM", "HIGH", "URGENT"})
+CASE_ASSIGNMENTS = frozenset({"all", "mine", "unassigned"})
+CASE_ORDERS = frozenset({"recent", "oldest"})
 ROUTINE_STATUSES = frozenset({
     "NOT_STARTED",
     "INTAKE_DRAFT",
@@ -70,6 +97,7 @@ ROUTINE_STATUSES = frozenset({
     "REOPENED_FOR_CORRECTION",
 })
 MAX_SESSION_SEARCH_LENGTH = 120
+MAX_CASE_SEARCH_LENGTH = 120
 
 
 def _parse_values(value, allowed, label):
@@ -208,11 +236,87 @@ def get_session_metadata_page(
     )
 
 
-def get_counseling_case_metadata_page(actor, page: PageRequest | None = None) -> PageResult[dict]:
-    projector = project_student_case_metadata if is_student(actor) else project_case_metadata
+def _filtered_case_queryset(
+    actor,
+    *,
+    q=None,
+    statuses=None,
+    concern_category=None,
+    priority=None,
+    assignment="all",
+    order="recent",
+):
+    if q is not None and len(str(q).strip()) > MAX_CASE_SEARCH_LENGTH:
+        raise ValueError("Counseling case search is too long.")
+    if concern_category and concern_category.upper() not in CASE_CONCERN_CATEGORIES:
+        raise ValueError("Invalid counseling case concern category filter.")
+    if priority and priority.upper() not in CASE_PRIORITIES:
+        raise ValueError("Invalid counseling case priority filter.")
+    if assignment not in CASE_ASSIGNMENTS:
+        raise ValueError("Invalid counseling case assignment filter.")
+    if order not in CASE_ORDERS:
+        raise ValueError("Invalid counseling case order.")
+
+    # Keep every filter after the selector so search and presentation filters
+    # cannot broaden the actor's existing case visibility scope.
     queryset = get_counseling_cases_visible_to(actor).select_related(
-        "student", "assigned_counselor"
-    ).order_by("-updated_at", "-pk")
+        "student",
+        "student__student_profile",
+        "assigned_counselor",
+    )
+    parsed_statuses = _parse_values(statuses, CASE_STATUSES, "case status")
+    if parsed_statuses:
+        queryset = queryset.filter(status__in=parsed_statuses)
+    if concern_category:
+        queryset = queryset.filter(concern_category=concern_category.upper())
+    if priority:
+        queryset = queryset.filter(priority=priority.upper())
+    if assignment == "mine":
+        queryset = queryset.filter(assigned_counselor_id=getattr(actor, "pk", None))
+    elif assignment == "unassigned":
+        queryset = queryset.filter(assigned_counselor_id__isnull=True)
+
+    search = str(q or "").strip()
+    if search:
+        search_filter = Q(reference_code__icontains=search)
+        if is_student(actor):
+            queryset = queryset.filter(search_filter)
+        else:
+            identity_filter = Q()
+            for term in search.split():
+                identity_filter &= (
+                    Q(student__first_name__icontains=term)
+                    | Q(student__last_name__icontains=term)
+                    | Q(student__student_profile__student_number__icontains=term)
+                )
+            queryset = queryset.filter(search_filter | identity_filter)
+
+    if order == "oldest":
+        return queryset.order_by("updated_at", "pk")
+    return queryset.order_by("-updated_at", "-pk")
+
+
+def get_counseling_case_metadata_page(
+    actor,
+    page: PageRequest | None = None,
+    *,
+    q=None,
+    statuses=None,
+    concern_category=None,
+    priority=None,
+    assignment="all",
+    order="recent",
+) -> PageResult[dict]:
+    projector = project_student_case_metadata if is_student(actor) else project_case_queue_metadata
+    queryset = _filtered_case_queryset(
+        actor,
+        q=q,
+        statuses=statuses,
+        concern_category=concern_category,
+        priority=priority,
+        assignment=assignment,
+        order=order,
+    )
     return _page_from_dict(
         page_queryset(queryset, page or PageRequest(), lambda row: projector(actor, row))
     )

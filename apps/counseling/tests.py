@@ -142,6 +142,7 @@ from apps.counseling.selectors import (
 )
 from apps.counseling.projections import (
     CASE_METADATA_FIELDS,
+    CASE_QUEUE_METADATA_FIELDS,
     STUDENT_CASE_METADATA_FIELDS,
     COUNSELOR_NOTE_FIELDS,
     STAFF_SESSION_METADATA_FIELDS,
@@ -151,6 +152,7 @@ from apps.counseling.projections import (
     project_student_session_metadata,
     project_student_session_summary,
     project_case_metadata,
+    project_case_queue_metadata,
     project_student_case_metadata,
     project_counselor_note,
     ROUTINE_SENSITIVE_DETAIL_FIELDS,
@@ -164,6 +166,8 @@ from apps.counseling.projections import (
     project_routine_interview_sensitive_detail,
     project_student_routine_interview,
 )
+from apps.counseling.queries import get_counseling_case_metadata_page
+from apps.common.contracts import PageRequest
 from apps.counseling.services import (
     _actor_category,
     SessionPermissionError,
@@ -1050,6 +1054,119 @@ class CaseVisibilityTests(TestCase):
                     )
                 )
                 self.assertTrue(forbidden.isdisjoint(projection))
+
+    def test_case_queue_projection_has_bounded_staff_fields_only(self):
+        self.student.first_name = "Alex"
+        self.student.last_name = "Scope"
+        self.student.save(update_fields=["first_name", "last_name"])
+        self.student.student_profile.student_number = "2026-0001"
+        self.student.student_profile.control_number = "CONTROL-PRIVATE-0001"
+        self.student.student_profile.save(update_fields=["student_number", "control_number"])
+
+        projection = project_case_queue_metadata(
+            self.assigned_counselor,
+            self.covered_case,
+        )
+
+        self.assertIsNotNone(projection)
+        self.assertEqual(
+            set(projection),
+            {
+                *CASE_QUEUE_METADATA_FIELDS,
+                "student_display_name",
+                "student_number",
+                "assignment_state",
+            },
+        )
+        self.assertEqual(projection["student_display_name"], "Alex Scope")
+        self.assertEqual(projection["student_number"], "2026-0001")
+        self.assertEqual(projection["assignment_state"], "Assigned to you")
+        self.assertNotIn("student_id", projection)
+        self.assertNotIn("assigned_counselor_id", projection)
+        self.assertNotIn("close_reason_code", projection)
+        self.assertTrue(
+            all(not isinstance(value, models.Model) for value in projection.values())
+        )
+
+    def test_case_queue_filters_stay_inside_visible_scope(self):
+        self.student.first_name = "Alex"
+        self.student.last_name = "Scope"
+        self.student.save(update_fields=["first_name", "last_name"])
+        self.out_of_scope_student.first_name = "Bea"
+        self.out_of_scope_student.last_name = "Coverage"
+        self.out_of_scope_student.save(update_fields=["first_name", "last_name"])
+        self.student.student_profile.student_number = "2026-0001"
+        self.student.student_profile.save(update_fields=["student_number"])
+        self.out_of_scope_student.student_profile.student_number = "2026-0002"
+        self.out_of_scope_student.student_profile.save(update_fields=["student_number"])
+
+        self.out_of_scope_case.status = CounselingCaseStatus.MONITORING
+        self.out_of_scope_case.priority = CounselingCasePriority.HIGH
+        self.out_of_scope_case.concern_category = CounselingCaseConcernCategory.PERSONAL
+        self.out_of_scope_case.save(
+            update_fields=["status", "priority", "concern_category", "updated_at"]
+        )
+        self.co_case.status = CounselingCaseStatus.ON_HOLD
+        self.co_case.priority = CounselingCasePriority.URGENT
+        self.co_case.save(update_fields=["status", "priority", "updated_at"])
+
+        filtered = get_counseling_case_metadata_page(
+            self.head,
+            PageRequest(page_size=20),
+            q="Bea",
+            statuses="MONITORING,ON_HOLD",
+            concern_category="PERSONAL",
+            priority="HIGH",
+            order="oldest",
+        )
+        self.assertEqual(
+            [item["reference_code"] for item in filtered.items],
+            [self.out_of_scope_case.reference_code],
+        )
+
+        assigned_to_me = get_counseling_case_metadata_page(
+            self.assigned_counselor,
+            PageRequest(page_size=20),
+            assignment="mine",
+        )
+        self.assertEqual(
+            {item["reference_code"] for item in assigned_to_me.items},
+            {
+                self.covered_case.reference_code,
+                self.out_of_scope_case.reference_code,
+                self.co_case.reference_code,
+                self.grant_case.reference_code,
+            },
+        )
+
+        email_search = get_counseling_case_metadata_page(
+            self.head,
+            PageRequest(page_size=20),
+            q=self.out_of_scope_student.email,
+        )
+        self.assertEqual(email_search.total, 0)
+
+        self.out_of_scope_student.student_profile.control_number = "CONTROL-PRIVATE-0002"
+        self.out_of_scope_student.student_profile.save(update_fields=["control_number"])
+        control_number_search = get_counseling_case_metadata_page(
+            self.head,
+            PageRequest(page_size=20),
+            q="CONTROL-PRIVATE-0002",
+        )
+        self.assertEqual(control_number_search.total, 0)
+
+        with self.assertRaises(ValueError):
+            get_counseling_case_metadata_page(
+                self.head,
+                PageRequest(page_size=20),
+                priority="NOT_A_PRIORITY",
+            )
+        with self.assertRaises(ValueError):
+            get_counseling_case_metadata_page(
+                self.head,
+                PageRequest(page_size=20),
+                statuses="OPEN,NOT_A_STATUS",
+            )
 
     def test_case_metadata_selectors_preserve_coverage_and_reference_scope(self):
         coverage_rows = get_counseling_case_metadata_visible_to(self.coverage_counselor)

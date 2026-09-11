@@ -104,6 +104,18 @@ CASE_METADATA_FIELDS = (
     "reopened_at",
 )
 
+CASE_QUEUE_METADATA_FIELDS = (
+    "reference_code",
+    "concern_category",
+    "priority",
+    "status",
+    "created_at",
+    "updated_at",
+    "resolved_at",
+    "closed_at",
+    "reopened_at",
+)
+
 STUDENT_CASE_METADATA_FIELDS = (
     "reference_code",
     "status",
@@ -361,6 +373,42 @@ def project_case_metadata(actor, counseling_case) -> dict | None:
     if not counseling_case or not can_view_counseling_case(actor, counseling_case):
         return None
     return _project_fields(counseling_case, CASE_METADATA_FIELDS)
+
+
+def project_case_queue_metadata(actor, counseling_case) -> dict | None:
+    """Return the bounded staff queue projection for a counseling case.
+
+    Queue consumers need a little more context than the legacy case metadata
+    projection, but must not receive database identifiers, actor relations,
+    reason-code history, or future narrative fields. Student identity is
+    added only through the approved display projection.
+    """
+    from apps.access_control.display import safe_student_display_label
+
+    if not counseling_case or is_student(actor) or not can_view_counseling_case(
+        actor,
+        counseling_case,
+    ):
+        return None
+    payload = _project_fields(counseling_case, CASE_QUEUE_METADATA_FIELDS)
+    student = getattr(counseling_case, "student", None)
+    profile = getattr(student, "student_profile", None)
+    student_number = getattr(profile, "student_number", None)
+    assigned_counselor_id = counseling_case.assigned_counselor_id
+    payload.update(
+        {
+            "student_display_name": safe_student_display_label(profile)[:160],
+            "student_number": str(student_number)[:50] if student_number is not None else None,
+            "assignment_state": (
+                "Unassigned"
+                if assigned_counselor_id is None
+                else "Assigned to you"
+                if assigned_counselor_id == getattr(actor, "pk", None)
+                else "Assigned"
+            ),
+        }
+    )
+    return payload
 
 
 def project_student_case_metadata(actor, counseling_case) -> dict | None:
