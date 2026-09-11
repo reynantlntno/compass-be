@@ -82,6 +82,29 @@ class AuditViewerTestCase(TestCase):
         for actor in (self.counselor, self.staff, self.student):
             self.assertEqual(viewer_planes(actor), frozenset())
 
+    def test_authority_self_projection_exposes_only_current_audit_planes(self):
+        client = Client()
+
+        def audit_planes_for(actor):
+            token = issue_token_pair(actor, assurance_verified=True).access_token
+            response = client.get(
+                "/api/v1/authority/me/",
+                HTTP_AUTHORIZATION=f"Bearer {token}",
+            )
+            self.assertEqual(response.status_code, 200, response.content)
+            return response.json()["audit_planes"]
+
+        self.assertEqual(audit_planes_for(self.it), ["technical"])
+        self.assertEqual(audit_planes_for(self.head), ["business"])
+        self.assertEqual(audit_planes_for(self.dpo), ["privacy"])
+        for actor in (self.counselor, self.staff, self.student):
+            self.assertEqual(audit_planes_for(actor), [])
+
+        appointment = DPOAppointment.objects.get(holder=self.dpo)
+        appointment.holder = self.it
+        appointment.save(update_fields=["holder", "updated_at"])
+        self.assertEqual(audit_planes_for(self.it), ["privacy", "technical"])
+
     def test_expired_dpo_and_legacy_accounts_fail_closed(self):
         appointment = DPOAppointment.objects.get(holder=self.dpo)
         appointment.valid_until = timezone.now() - timedelta(seconds=1)

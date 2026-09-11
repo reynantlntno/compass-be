@@ -1,6 +1,7 @@
 """Safe, internal account-authority management API."""
 
 from datetime import date
+from typing import Literal
 
 from django.db import transaction
 from ninja import Router, Schema
@@ -122,6 +123,18 @@ class EffectiveAuthorityProjectionSchema(Schema):
     grants: list[GrantProjectionSchema]
 
 
+AuditPlaneValue = Literal["technical", "business", "privacy"]
+
+
+class AuthorityMeProjectionSchema(Schema):
+    account_id: int
+    role: str
+    is_head_guidance: bool
+    effective_capabilities: list[EffectiveCapabilityProjectionSchema]
+    grants: list[GrantProjectionSchema]
+    audit_planes: list[AuditPlaneValue]
+
+
 class CounselorCoverageProjectionSchema(Schema):
     scope_label: str
     campus: str | None = None
@@ -221,6 +234,13 @@ def _effective_projection(context):
     return rows
 
 
+def _audit_planes(actor):
+    """Expose only the actor's currently authorized audit visibility planes."""
+    from apps.audit.policies import viewer_planes
+
+    return sorted(plane.value for plane in viewer_planes(actor))
+
+
 @router.get("/capabilities/", response=CapabilityPageSchema, operation_id="authority_capabilities")
 def capabilities(request, page: PageQuery, page_size: PageSizeQuery):
     _require_manager(request)
@@ -294,7 +314,7 @@ def account_effective(request, user_id: int):
     }
 
 
-@router.get("/me/", response=EffectiveAuthorityProjectionSchema, operation_id="authority_me")
+@router.get("/me/", response=AuthorityMeProjectionSchema, operation_id="authority_me")
 def me(request):
     user = _actor(request)
     context = build_authority_context(user)
@@ -304,6 +324,7 @@ def me(request):
         "is_head_guidance": context.is_head_guidance,
         "effective_capabilities": _effective_projection(context),
         "grants": [_project(grant) for grant in context.grants[:100]],
+        "audit_planes": _audit_planes(user),
     }
 
 
