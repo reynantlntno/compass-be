@@ -49,6 +49,23 @@ STAFF_SESSION_METADATA_FIELDS = (
     "locked_at",
 )
 
+QUEUE_STAFF_SESSION_METADATA_FIELDS = (
+    "reference_code",
+    "session_type",
+    "session_mode",
+    "session_source",
+    "status",
+    "scheduled_start_at",
+    "scheduled_end_at",
+    "actual_started_at",
+    "actual_ended_at",
+    "actual_duration_minutes",
+    "ended_early_flag",
+    "completed_at",
+    "finalized_at",
+    "locked_at",
+)
+
 STUDENT_SESSION_METADATA_FIELDS = (
     "reference_code",
     "session_type",
@@ -247,6 +264,40 @@ def project_staff_session_metadata(actor, session) -> dict | None:
     if not session or is_student(actor) or not can_view_session(actor, session):
         return None
     return _project_fields(session, STAFF_SESSION_METADATA_FIELDS)
+
+
+def project_staff_session_queue_metadata(actor, session) -> dict | None:
+    """Return queue-safe staff metadata with bounded student display fields.
+
+    The existing staff metadata projection remains unchanged for callers that
+    depend on its established allowlist.  Queue consumers may opt into this
+    additive presentation projection without widening detail or note output.
+    """
+    from apps.access_control.display import safe_student_display_label
+
+    existing_payload = project_staff_session_metadata(actor, session)
+    if existing_payload is None:
+        return None
+    payload = {
+        field: existing_payload[field]
+        for field in QUEUE_STAFF_SESSION_METADATA_FIELDS
+    }
+    student = getattr(session, "student", None)
+    profile = getattr(student, "student_profile", None)
+    payload.update(
+        {
+            "student_display_name": safe_student_display_label(profile),
+            "student_number": getattr(profile, "student_number", None),
+            "assignment_state": (
+                "Unassigned"
+                if session.assigned_counselor_id is None
+                else "Assigned to you"
+                if session.assigned_counselor_id == getattr(actor, "pk", None)
+                else "Assigned"
+            ),
+        }
+    )
+    return payload
 
 
 def project_student_session_metadata(actor, session) -> dict | None:

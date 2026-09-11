@@ -12,7 +12,7 @@ from datetime import datetime as datetime_type
 from datetime import time as time_type
 from uuid import UUID
 
-from ninja import Router, Schema
+from ninja import Query, Router, Schema
 
 from apps.account_security.network import get_client_ip_from_headers
 from apps.counseling import queries as counseling_queries
@@ -89,6 +89,9 @@ class CounselingSessionProjectionSchema(Schema):
     actual_ended_at: datetime_type | None = None
     actual_duration_minutes: int | None = None
     completed_at: datetime_type | None = None
+    student_display_name: str | None = None
+    student_number: str | None = None
+    assignment_state: str | None = None
 
 
 class CounselingSessionPageSchema(PageResultSchema):
@@ -332,7 +335,7 @@ class AssignmentSchema(Schema):
     counselor: int
 
 
-class ReasonSchema(Schema):
+class CounselingReasonSchema(Schema):
     reason: str
 
 
@@ -674,9 +677,37 @@ def _load_session_or_404(actor, reference_code):
     exclude_unset=True,
     operation_id="counseling_sessions_list",
 )
-def list_sessions(request, page: PageQuery, page_size: PageSizeQuery):
+def list_sessions(
+    request,
+    page: PageQuery,
+    page_size: PageSizeQuery,
+    q: str | None = Query(default=None, max_length=120),
+    status: str | None = Query(default=None, max_length=400),
+    session_type: str | None = Query(default=None),
+    session_mode: str | None = Query(default=None),
+    session_source: str | None = Query(default=None),
+    assignment: str = Query(default="all"),
+    date_from: date_type | None = Query(default=None),
+    date_to: date_type | None = Query(default=None),
+    order: str = Query(default="recent"),
+):
     prepare_api_operation(request, "counseling_sessions_list")
-    return counseling_queries.get_session_metadata_page(_actor(request), _page(page, page_size)).as_dict()
+    try:
+        return counseling_queries.get_session_metadata_page(
+            _actor(request),
+            _page(page, page_size),
+            q=q,
+            statuses=status,
+            session_type=session_type,
+            session_mode=session_mode,
+            session_source=session_source,
+            assignment=assignment,
+            date_from=date_from,
+            date_to=date_to,
+            order=order,
+        ).as_dict()
+    except ValueError as error:
+        raise ValidationError(field_errors={"filters": ["Invalid counseling session filters."]}) from error
 
 
 @router.get(
@@ -874,7 +905,7 @@ def lock_session_route(request, reference_code: str):
     exclude_unset=True,
     operation_id="counseling_session_cancel",
 )
-def cancel_session_route(request, reference_code: str, payload: ReasonSchema):
+def cancel_session_route(request, reference_code: str, payload: CounselingReasonSchema):
     from apps.orchestration.commands import LinkedCounselingSessionCommand
     from apps.orchestration.use_cases import cancel_counseling_session_with_linked_appointment
 
@@ -947,12 +978,21 @@ def assign_session_route(request, reference_code: str, payload: AssignmentSchema
     exclude_unset=True,
     operation_id="counseling_routine_interviews_list",
 )
-def list_routine_interviews(request, page: PageQuery, page_size: PageSizeQuery):
+def list_routine_interviews(
+    request,
+    page: PageQuery,
+    page_size: PageSizeQuery,
+    status: str | None = Query(default=None, max_length=400),
+):
     prepare_api_operation(request, "counseling_routine_interviews_list")
-    return counseling_queries.get_routine_interview_metadata_page(
-        _actor(request),
-        _page(page, page_size),
-    ).as_dict()
+    try:
+        return counseling_queries.get_routine_interview_metadata_page(
+            _actor(request),
+            _page(page, page_size),
+            statuses=status,
+        ).as_dict()
+    except ValueError as error:
+        raise ValidationError(field_errors={"filters": ["Invalid routine interview filters."]}) from error
 
 
 @router.get(

@@ -43,6 +43,7 @@ class Capability(str, Enum):
     SYSTEM_ERRORS_VIEW = "system.errors.view"
     AUDIT_VIEW = "audit.view"
 
+    COUNSELING_SESSIONS_QUEUE_VIEW = "counseling.sessions.queue.view"
     COUNSELING_SESSION_METADATA_VIEW_INSTITUTION = "counseling_sessions.metadata.view_institution"
     COUNSELING_SESSION_ASSIGN = "counseling_sessions.assign"
     COUNSELING_SESSION_LOCK = "counseling_sessions.lock"
@@ -209,7 +210,7 @@ def _declare(capabilities, *, sources, grant_roles=(), grant_scopes=(), expiry=F
 
 
 _declare(
-    (Capability.STUDENT_RECORDS_VIEW_SCOPED,),
+    (Capability.STUDENT_RECORDS_VIEW_SCOPED, Capability.COUNSELING_SESSIONS_QUEUE_VIEW),
     sources={AuthoritySource.COUNSELOR_BASELINE}, bundle="students",
 )
 _declare(
