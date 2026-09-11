@@ -1962,7 +1962,10 @@ def create_urgent_support_request(user, command: UrgentSupportCreateCommand):
 
 @transaction.atomic
 def create_urgent_support_triage_session(user, reference_code, command: UrgentSupportTriageCommand):
-    from apps.counseling.policies import can_create_urgent_support_triage_session
+    from apps.counseling.policies import (
+        can_assign_urgent_support_triage_counselor,
+        can_create_urgent_support_triage_session,
+    )
     from apps.counseling.reference_codes import generate_session_reference_code
     from apps.counseling.models import (
         CounselingSession, CounselingSessionStatusHistory,
@@ -1991,6 +1994,12 @@ def create_urgent_support_triage_session(user, reference_code, command: UrgentSu
         )
         if assigned_counselor is None or not is_counselor(assigned_counselor):
             raise UrgentSupportValidationError("The selected counselor is not available.")
+        if not can_assign_urgent_support_triage_counselor(
+            user,
+            urgent_support,
+            assigned_counselor,
+        ):
+            raise UrgentSupportPermissionError("You do not have permission to assign this counselor.")
     elif not is_counselor(user):
         raise UrgentSupportValidationError(
             "An active counselor must be assigned before creating a triage session."

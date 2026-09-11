@@ -367,13 +367,108 @@ URGENT_SUPPORT_METADATA_FIELDS = (
     "documentation_status",
 )
 
+URGENT_SUPPORT_STATUSES = frozenset({
+    "OPEN",
+    "TRIAGE_ACCESS_GRANTED",
+    "TRIAGE_IN_PROGRESS",
+    "PENDING_HEAD_REVIEW",
+    "CONFIRMED",
+    "REVOKED",
+    "CLOSED",
+    "EXPIRED",
+})
+URGENT_SUPPORT_URGENCY_LEVELS = frozenset({
+    "IMMEDIATE_TRIAGE",
+    "SAME_DAY_REVIEW",
+    "PROMPT_REVIEW",
+})
+URGENT_SUPPORT_SOURCE_TYPES = frozenset({
+    "COUNSELOR_MANUAL",
+    "HEAD_GUIDANCE_MANUAL",
+    "SESSION_FLAG",
+    "CASE_FLAG",
+})
+URGENT_SUPPORT_REVIEW_STATUSES = frozenset({
+    "NOT_REVIEWED",
+    "REVIEWED_CONFIRMED",
+    "REVIEWED_REASSIGNMENT_REQUIRED",
+    "REVIEWED_CASE_COLLABORATOR_REQUIRED",
+    "REVIEWED_CLOSE_ALLOWED",
+    "REVIEWED_REVOKED",
+})
+URGENT_SUPPORT_ASSIGNMENTS = frozenset({"all", "mine", "unassigned"})
+URGENT_SUPPORT_ORDERS = frozenset({"recent", "oldest"})
+MAX_URGENT_SUPPORT_SEARCH_LENGTH = 120
+
+
+def _filtered_urgent_support_queryset(
+    actor,
+    *,
+    q=None,
+    statuses=None,
+    urgency_level=None,
+    source_type=None,
+    assignment="all",
+    review_status=None,
+    order="recent",
+):
+    if q is not None and len(str(q).strip()) > MAX_URGENT_SUPPORT_SEARCH_LENGTH:
+        raise ValueError("Urgent-support search is too long.")
+    if urgency_level and urgency_level.upper() not in URGENT_SUPPORT_URGENCY_LEVELS:
+        raise ValueError("Invalid urgent-support urgency filter.")
+    if source_type and source_type.upper() not in URGENT_SUPPORT_SOURCE_TYPES:
+        raise ValueError("Invalid urgent-support source filter.")
+    if assignment not in URGENT_SUPPORT_ASSIGNMENTS:
+        raise ValueError("Invalid urgent-support assignment filter.")
+    if order not in URGENT_SUPPORT_ORDERS:
+        raise ValueError("Invalid urgent-support order.")
+
+    # Scope is established before any presentation filter is applied.
+    queryset = get_urgent_support_requests_visible_to(actor).select_related(
+        "student",
+        "student__student_profile",
+        "triage_counselor",
+        "originating_session",
+        "documentation_session",
+        "counseling_case",
+    )
+    parsed_statuses = _parse_values(statuses, URGENT_SUPPORT_STATUSES, "urgent-support status")
+    if parsed_statuses:
+        queryset = queryset.filter(status__in=parsed_statuses)
+    if urgency_level:
+        queryset = queryset.filter(urgency_level=urgency_level.upper())
+    if source_type:
+        queryset = queryset.filter(source_type=source_type.upper())
+    if review_status:
+        if review_status.upper() not in URGENT_SUPPORT_REVIEW_STATUSES:
+            raise ValueError("Invalid urgent-support review filter.")
+        queryset = queryset.filter(review_status=review_status.upper())
+    if assignment == "mine":
+        queryset = queryset.filter(triage_counselor_id=getattr(actor, "pk", None))
+    elif assignment == "unassigned":
+        queryset = queryset.filter(triage_counselor_id__isnull=True)
+
+    search = str(q or "").strip()
+    if search:
+        search_filter = Q(reference_code__icontains=search)
+        if is_student(actor):
+            queryset = queryset.filter(search_filter)
+        else:
+            identity_filter = Q()
+            for term in search.split():
+                identity_filter &= (
+                    Q(student__first_name__icontains=term)
+                    | Q(student__last_name__icontains=term)
+                    | Q(student__student_profile__student_number__icontains=term)
+                )
+            queryset = queryset.filter(search_filter | identity_filter)
+    if order == "oldest":
+        return queryset.order_by("updated_at", "pk")
+    return queryset.order_by("-updated_at", "-pk")
+
 
 def project_urgent_support_metadata(actor, urgent_support, *, already_scoped=False) -> dict | None:
-    """Return the safe operational urgent-support projection.
-
-    Excludes student identity beyond the reference code, raw reasons,
-    temporary-access details, actor relations, and any narrative content.
-    """
+    """Return the safe operational urgent-support detail projection."""
     from apps.access_control.rules import is_active_nonlegacy_actor
 
     if urgent_support is None or not is_active_nonlegacy_actor(actor):
@@ -382,25 +477,197 @@ def project_urgent_support_metadata(actor, urgent_support, *, already_scoped=Fal
         pk=urgent_support.pk,
     ).exists():
         return None
-    payload = {
-        field: to_json_value(getattr(urgent_support, field))
-        for field in URGENT_SUPPORT_METADATA_FIELDS
-    }
-    if getattr(urgent_support, "counseling_case_id", None):
-        payload["counseling_case_reference"] = (
-            urgent_support.counseling_case.reference_code
+    payload = project_urgent_support_queue_metadata(
+        actor,
+        urgent_support,
+        already_scoped=True,
+    )
+    if payload is None:
+        return None
+    if getattr(urgent_support, "originating_session_id", None):
+        payload["originating_session_reference"] = urgent_support.originating_session.reference_code
+    if getattr(urgent_support, "documentation_session_id", None):
+        payload["documentation_session_reference"] = urgent_support.documentation_session.reference_code
+    from apps.counseling.policies import (
+        can_open_temporary_support_access_grant_form,
+        can_revoke_temporary_support_access,
+    )
+    # The detail has already passed the actor's row-scope check.  The revoke
+    # policy still takes a grant object for its service-level contract, so use
+    # a null placeholder only for this capability gate; no grant is resolved
+    # or exposed until the scoped active-grant query below.
+    can_manage_grants = (
+        can_open_temporary_support_access_grant_form(actor, urgent_support)
+        or can_revoke_temporary_support_access(actor, None)
+    )
+    if can_manage_grants:
+        from apps.access_control.display import safe_user_display_label
+        from apps.counseling.models import TemporarySupportAccessStatus
+        from apps.counseling.urgent_support_selectors import issue_grant_selection_token
+
+        grants = urgent_support.access_grants.select_related("grantee").filter(
+            status=TemporarySupportAccessStatus.ACTIVE,
+            revoked_at__isnull=True,
         )
+        payload["active_access_grants"] = [
+            {
+                "selection_token": issue_grant_selection_token(actor, grant),
+                "display_name": safe_user_display_label(grant.grantee),
+                "grant_type": grant.grant_type,
+                "purpose_code": grant.purpose_code,
+                "starts_at": to_json_value(grant.starts_at),
+                "expires_at": to_json_value(grant.expires_at),
+                "status": grant.status,
+            }
+            for grant in grants
+        ]
     return payload
 
 
-def get_urgent_support_metadata_page(actor, page: PageRequest | None = None) -> PageResult[dict]:
-    queryset = get_urgent_support_requests_visible_to(actor).select_related(
-        "counseling_case"
-    ).order_by("-created_at", "-pk")
+URGENT_SUPPORT_QUEUE_METADATA_FIELDS = (
+    *URGENT_SUPPORT_METADATA_FIELDS,
+    "review_status",
+    "created_at",
+    "updated_at",
+    "reviewed_at",
+    "closed_at",
+    "expires_at",
+)
+
+
+def project_urgent_support_queue_metadata(actor, urgent_support, *, already_scoped=False) -> dict | None:
+    """Return bounded operational queue metadata within the existing scope."""
+    from apps.access_control.display import safe_student_display_label
+    from apps.access_control.rules import is_active_nonlegacy_actor
+
+    if urgent_support is None or not is_active_nonlegacy_actor(actor):
+        return None
+    if not already_scoped and not get_urgent_support_requests_visible_to(actor).filter(
+        pk=urgent_support.pk,
+    ).exists():
+        return None
+    student = getattr(urgent_support, "student", None)
+    profile = getattr(student, "student_profile", None)
+    assigned_id = getattr(urgent_support, "triage_counselor_id", None)
+    payload = {
+        field: to_json_value(getattr(urgent_support, field))
+        for field in URGENT_SUPPORT_QUEUE_METADATA_FIELDS
+    }
+    payload.update(
+        {
+            "student_display_name": safe_student_display_label(profile)[:160],
+            "student_number": (
+                str(getattr(profile, "student_number", ""))[:50]
+                if profile is not None and getattr(profile, "student_number", None)
+                else None
+            ),
+            "assignment_state": (
+                "Unassigned"
+                if assigned_id is None
+                else "Assigned to you"
+                if assigned_id == getattr(actor, "pk", None)
+                else "Assigned"
+            ),
+            "counseling_case_reference": (
+                urgent_support.counseling_case.reference_code
+                if getattr(urgent_support, "counseling_case_id", None)
+                else None
+            ),
+            "originating_session_reference": (
+                urgent_support.originating_session.reference_code
+                if getattr(urgent_support, "originating_session_id", None)
+                else None
+            ),
+            "documentation_session_reference": (
+                urgent_support.documentation_session.reference_code
+                if getattr(urgent_support, "documentation_session_id", None)
+                else None
+            ),
+        }
+    )
+    return payload
+
+
+def get_urgent_support_options(actor, urgent_support, *, q=None, page=None):
+    """Return policy-scoped active counselor options with opaque tokens."""
+    from apps.access_control.authority import has_capability, has_fixed_capability
+    from apps.access_control.capabilities import Capability
+    from apps.accounts.models import RoleChoices, User
+    from apps.counseling.policies import (
+        can_assign_urgent_support_triage_counselor,
+        can_grant_temporary_support_access,
+        can_create_urgent_support_triage_session,
+        can_open_temporary_support_access_grant_form,
+    )
+    from apps.counseling.urgent_support_selectors import issue_counselor_selection_token
+    from apps.access_control.display import safe_user_display_label
+
+    if not (
+        can_create_urgent_support_triage_session(actor, urgent_support)
+        or can_open_temporary_support_access_grant_form(actor, urgent_support)
+    ):
+        return PageResult((), page.page if page else 1, page.page_size if page else 25, 0)
+    if not (
+        has_capability(actor, Capability.URGENT_SUPPORT_ASSIGN)
+        or has_fixed_capability(actor, Capability.URGENT_SUPPORT_TEMPORARY_ACCESS_MANAGE)
+    ):
+        return PageResult((), page.page if page else 1, page.page_size if page else 25, 0)
+    queryset = User.objects.filter(
+        is_active=True,
+        is_superuser=False,
+        role=RoleChoices.COUNSELOR,
+    ).order_by("last_name", "first_name", "pk")
+    search = " ".join(str(q or "").split())[:80]
+    if search:
+        queryset = queryset.filter(
+            Q(first_name__icontains=search) | Q(last_name__icontains=search)
+        )
+    allowed_ids = [
+        counselor.pk
+        for counselor in queryset
+        if can_assign_urgent_support_triage_counselor(actor, urgent_support, counselor)
+        or can_grant_temporary_support_access(actor, urgent_support, counselor)
+    ]
+    queryset = queryset.filter(pk__in=allowed_ids)
+    request = page or PageRequest()
+    return _page_from_dict(
+        page_queryset(
+            queryset,
+            request,
+            lambda counselor: {
+                "selection_token": issue_counselor_selection_token(actor, urgent_support, counselor),
+                "display_name": safe_user_display_label(counselor),
+            },
+        )
+    )
+
+
+def get_urgent_support_metadata_page(
+    actor,
+    page: PageRequest | None = None,
+    *,
+    q=None,
+    statuses=None,
+    urgency_level=None,
+    source_type=None,
+    assignment="all",
+    review_status=None,
+    order="recent",
+) -> PageResult[dict]:
+    queryset = _filtered_urgent_support_queryset(
+        actor,
+        q=q,
+        statuses=statuses,
+        urgency_level=urgency_level,
+        source_type=source_type,
+        assignment=assignment,
+        review_status=review_status,
+        order=order,
+    )
     return _page_from_dict(
         page_queryset(
             queryset,
             page or PageRequest(),
-            lambda row: project_urgent_support_metadata(actor, row, already_scoped=True),
+            lambda row: project_urgent_support_queue_metadata(actor, row, already_scoped=True),
         )
     )

@@ -374,11 +374,13 @@ class ApiOperationRegistryTests(SimpleTestCase):
             "appointments_availability_create", "appointments_availability_update",
             "appointments_availability_deactivate", "appointments_office_closure_create",
             "appointments_office_closure_update", "appointments_office_closure_deactivate",
-            "counseling_sessions_list", "counseling_session_detail",
+            "counseling_sessions_list", "counseling_session_detail", "counseling_session_workspace",
+            "counseling_note_detail",
             "counseling_session_summary", "counseling_routine_interviews_list",
             "counseling_routine_interview_detail", "counseling_routine_interview_sensitive_detail",
             "counseling_cases_list",
             "counseling_case_detail", "counseling_urgent_list", "counseling_urgent_detail",
+            "counseling_urgent_counselor_options",
             "counseling_ecounseling_detail",
             "counseling_session_create", "counseling_session_start", "counseling_note_save",
             "counseling_session_complete", "counseling_session_finalize",
@@ -947,6 +949,10 @@ class ApiResponseDocumentationTests(SimpleTestCase):
             "counseling_routine_interviews_list": ("/api/v1/counseling/routine-interviews/", "get"),
             "counseling_cases_list": ("/api/v1/counseling/cases/", "get"),
             "counseling_urgent_list": ("/api/v1/counseling/urgent-support/", "get"),
+            "counseling_urgent_counselor_options": (
+                "/api/v1/counseling/urgent-support/{reference_code}/counselor-options/",
+                "get",
+            ),
             "exit_interviews_list": ("/api/v1/exit-interviews/", "get"),
             "exit_interviews_assignments_list": ("/api/v1/exit-interviews/assignments/", "get"),
             "form_collections_list": ("/api/v1/form-collections/", "get"),
@@ -1023,7 +1029,7 @@ class ApiResponseDocumentationTests(SimpleTestCase):
                 >= {"page", "page_size"}
             )
 
-        self.assertEqual(len(expected_paths), 80)
+        self.assertEqual(len(expected_paths), 81)
         self.assertEqual(
             {
                 operation_id
@@ -1887,12 +1893,14 @@ class CounselingResponseDocumentationTests(SimpleTestCase):
             if operation_id.startswith("counseling_")
         }
         json_ids = counseling_ids - binary_ids
-        self.assertEqual(len(counseling_ids), 67)
-        self.assertEqual(len(json_ids), 63)
+        self.assertEqual(len(counseling_ids), 70)
+        self.assertEqual(len(json_ids), 66)
 
         explicit = {
             "counseling_sessions_list": "CounselingSessionPageSchema",
             "counseling_session_detail": "CounselingSessionProjectionSchema",
+            "counseling_session_workspace": "CounselingSessionWorkspaceContextSchema",
+            "counseling_note_detail": "CounselingNoteProjectionSchema",
             "counseling_session_summary": "CounselingStudentSummarySchema",
             "counseling_routine_interviews_list": "RoutineInterviewPageSchema",
             "counseling_routine_interview_detail": "RoutineInterviewProjectionSchema",
@@ -1901,6 +1909,7 @@ class CounselingResponseDocumentationTests(SimpleTestCase):
             "counseling_cases_list": "CounselingCaseQueuePageSchema",
             "counseling_case_detail": "CounselingCaseProjectionSchema",
             "counseling_urgent_list": "UrgentSupportPageSchema",
+            "counseling_urgent_counselor_options": "UrgentSupportCounselorOptionPageSchema",
             "counseling_urgent_detail": "UrgentSupportProjectionSchema",
             "counseling_ecounseling_recording_availability": "RecordingAvailabilitySchema",
             "counseling_ecounseling_recording_status": "RecordingStatusSchema",
@@ -1937,7 +1946,7 @@ class CounselingResponseDocumentationTests(SimpleTestCase):
             "CounselingSessionPageSchema": "CounselingSessionProjectionSchema",
             "RoutineInterviewPageSchema": "RoutineInterviewQueueProjectionSchema",
             "CounselingCaseQueuePageSchema": "CounselingCaseQueueProjectionSchema",
-            "UrgentSupportPageSchema": "UrgentSupportProjectionSchema",
+            "UrgentSupportPageSchema": "UrgentSupportQueueProjectionSchema",
         }
         for page_schema, item_schema in page_items.items():
             with self.subTest(page_schema=page_schema):

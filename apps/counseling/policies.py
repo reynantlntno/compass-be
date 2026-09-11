@@ -1241,6 +1241,20 @@ def can_create_urgent_support_triage_session(user, urgent_support) -> bool:
     return False
 
 
+def can_assign_urgent_support_triage_counselor(user, urgent_support, counselor) -> bool:
+    """Allow only policy-scoped counselor choices for urgent triage."""
+    if _fail_closed(user) or urgent_support is None or not _is_active_counselor(counselor):
+        return False
+    if counselor.pk == getattr(user, "pk", None):
+        return can_create_urgent_support_triage_session(user, urgent_support)
+    return _has_student_workflow_capability(
+        user,
+        Capability.URGENT_SUPPORT_ASSIGN,
+        urgent_support.student,
+        assigned_counselor=counselor,
+    )
+
+
 def can_link_urgent_support_to_case(user, urgent_support, counseling_case) -> bool:
     if _fail_closed(user):
         return False

@@ -27,6 +27,8 @@ from apps.counseling.api import (
     RoutineInterviewSensitiveDetailSchema,
     TranscriptMetadataSchema,
     TranscriptionStatusSchema,
+    UrgentSupportCounselorOptionPageSchema,
+    UrgentSupportQueueProjectionSchema,
     UrgentSupportProjectionSchema,
     add_collaborator_route,
     consent_request_route,
@@ -261,6 +263,20 @@ class CounselingOutputSchemaTests(SimpleTestCase):
         self.assertEqual(sensitive.special_concern, "bounded detail")
 
     def test_urgent_and_student_summary_outputs_are_explicit(self):
+        queue = UrgentSupportQueueProjectionSchema(
+            reference_code="URG-AY2627-000001",
+            status="OPEN",
+            urgency_level="IMMEDIATE_TRIAGE",
+            source_type="COUNSELOR_MANUAL",
+            documentation_status="NOT_STARTED",
+            review_status="NOT_REVIEWED",
+            student_display_name="Test User",
+            student_number="20260001",
+            assignment_state="Assigned to you",
+            counseling_case_reference="CAS-AY2627-000001",
+            originating_session_reference="SES-AY2627-000001",
+            documentation_session_reference="SES-AY2627-000002",
+        )
         urgent = UrgentSupportProjectionSchema(
             reference_code="URG-AY2627-000001",
             status="OPEN",
@@ -270,6 +286,31 @@ class CounselingOutputSchemaTests(SimpleTestCase):
             counseling_case_reference="CAS-AY2627-000001",
         )
         summary = CounselingStudentSummarySchema(student_visible_summary="student-safe")
+        option_page = UrgentSupportCounselorOptionPageSchema(
+            page=1,
+            page_size=20,
+            total=1,
+            items=[{"selection_token": "opaque-token", "display_name": "Counselor"}],
+        )
+        self.assertEqual(
+            set(queue.dict(exclude_unset=True)),
+            {
+                "reference_code",
+                "status",
+                "urgency_level",
+                "source_type",
+                "documentation_status",
+                "review_status",
+                "student_display_name",
+                "student_number",
+                "assignment_state",
+                "counseling_case_reference",
+                "originating_session_reference",
+                "documentation_session_reference",
+            },
+        )
+        self.assertNotIn("active_access_grants", queue.dict(exclude_unset=True))
+        self.assertEqual(option_page.items[0].selection_token, "opaque-token")
         self.assertEqual(urgent.counseling_case_reference, "CAS-AY2627-000001")
         self.assertEqual(summary.student_visible_summary, "student-safe")
         self.assertNotIn("student_id", UrgentSupportProjectionSchema.__annotations__)

@@ -260,6 +260,8 @@ def _register_counseling_operations():
     read_operations = (
         "counseling_sessions_list",
         "counseling_session_detail",
+        "counseling_session_workspace",
+        "counseling_note_detail",
         "counseling_session_summary",
         "counseling_routine_interviews_list",
         "counseling_routine_interview_detail",
@@ -268,6 +270,7 @@ def _register_counseling_operations():
         "counseling_case_detail",
         "counseling_urgent_list",
         "counseling_urgent_detail",
+        "counseling_urgent_counselor_options",
         "counseling_ecounseling_detail",
         "counseling_ecounseling_recording_availability",
         "counseling_ecounseling_recording_status",

@@ -98,6 +98,45 @@ class CounselingSessionPageSchema(PageResultSchema):
     items: list[CounselingSessionProjectionSchema]
 
 
+class CounselingSessionWorkspaceContextSchema(Schema):
+    """Safe counselor workspace context without raw identifiers or tokens."""
+
+    reference_code: str
+    session_type: str
+    session_mode: str
+    session_source: str
+    status: str
+    scheduled_start_at: datetime_type | None = None
+    scheduled_end_at: datetime_type | None = None
+    actual_started_at: datetime_type | None = None
+    actual_ended_at: datetime_type | None = None
+    completed_at: datetime_type | None = None
+    finalized_at: datetime_type | None = None
+    locked_at: datetime_type | None = None
+    student_display_name: str | None = None
+    student_number: str | None = None
+    assignment_state: str | None = None
+    routine_interview_available: bool
+    ecounseling_reference_code: str | None = None
+    ecounseling_join_code: str | None = None
+    ecounseling_join_available: bool
+    ecounseling_next_action: str | None = None
+    recording_consent_status: str | None = None
+    recording_requested: bool | None = None
+    recording_controls_enabled: bool
+
+
+class CounselingNoteProjectionSchema(Schema):
+    """Authorized note content; encrypted storage and actor fields are absent."""
+
+    student_visible_summary: str
+    counselor_narrative: str
+    recommendations: str
+    special_concerns: str
+    follow_up_needed: bool
+    follow_up_notes: str
+
+
 class CounselingStudentSummarySchema(Schema):
     """The sole student-safe session-note projection."""
 
@@ -306,19 +345,55 @@ class CounselingCaseQueuePageSchema(PageResultSchema):
     items: list[CounselingCaseQueueProjectionSchema]
 
 
-class UrgentSupportProjectionSchema(Schema):
-    """Output-only urgent-support metadata projection."""
+class UrgentSupportAccessGrantProjectionSchema(Schema):
+    selection_token: str
+    display_name: str
+    grant_type: str
+    purpose_code: str
+    starts_at: datetime_type
+    expires_at: datetime_type
+    status: str
+
+
+class UrgentSupportQueueProjectionSchema(Schema):
+    """Bounded operational queue projection."""
 
     reference_code: str
     status: str
     urgency_level: str
     source_type: str
     documentation_status: str
+    review_status: str | None = None
+    student_display_name: str | None = None
+    student_number: str | None = None
+    assignment_state: str | None = None
+    created_at: datetime_type | None = None
+    updated_at: datetime_type | None = None
+    reviewed_at: datetime_type | None = None
+    closed_at: datetime_type | None = None
+    expires_at: datetime_type | None = None
     counseling_case_reference: str | None = None
+    originating_session_reference: str | None = None
+    documentation_session_reference: str | None = None
+
+
+class UrgentSupportProjectionSchema(UrgentSupportQueueProjectionSchema):
+    """Safe urgent-support detail projection."""
+
+    active_access_grants: list[UrgentSupportAccessGrantProjectionSchema] | None = None
+
+
+class UrgentSupportCounselorOptionSchema(Schema):
+    selection_token: str
+    display_name: str
+
+
+class UrgentSupportCounselorOptionPageSchema(PageResultSchema):
+    items: list[UrgentSupportCounselorOptionSchema]
 
 
 class UrgentSupportPageSchema(PageResultSchema):
-    items: list[UrgentSupportProjectionSchema]
+    items: list[UrgentSupportQueueProjectionSchema]
 
 
 class CounselingMutationResponseSchema(Schema):
@@ -539,23 +614,27 @@ class UrgentCreateSchema(Schema):
 
 class UrgentTriageSchema(Schema):
     assigned_counselor: int | None = None
+    counselor_selection_token: str | None = None
     session_mode: str = ""
     scheduled_start_at: str | None = None
     scheduled_end_at: str | None = None
 
 
 class AccessGrantSchema(Schema):
-    grantee_id: int
+    grantee_id: int | None = None
+    grantee_selection_token: str | None = None
     grant_type: str
     purpose_code: str
+    expires_at: datetime_type | None = None
 
 
-class RevokeSchema(Schema):
-    grant_id: int
+class UrgentSupportRevokeSchema(Schema):
+    grant_id: int | None = None
+    grant_selection_token: str | None = None
     reason_code: str = ""
 
 
-class ReviewSchema(Schema):
+class UrgentSupportReviewSchema(Schema):
     review_status: str
     followup_action: str = ""
 
@@ -852,6 +931,46 @@ def session_detail(request, reference_code: str):
         payload = project_student_session_metadata(actor, session)
     else:
         payload = project_staff_session_metadata(actor, session)
+    if payload is None:
+        raise NotFoundError()
+    return payload
+
+
+@router.get(
+    "/sessions/{reference_code}/workspace/",
+    response=CounselingSessionWorkspaceContextSchema,
+    exclude_unset=True,
+    operation_id="counseling_session_workspace",
+)
+def session_workspace_context(request, reference_code: str):
+    from apps.counseling.projections import project_staff_session_workspace_context
+
+    prepare_api_operation(request, "counseling_session_workspace")
+    actor = _actor(request)
+    payload = project_staff_session_workspace_context(
+        actor,
+        get_session_or_404(actor, reference_code),
+    )
+    if payload is None:
+        raise NotFoundError()
+    return payload
+
+
+@router.get(
+    "/sessions/{reference_code}/note/",
+    response=CounselingNoteProjectionSchema,
+    exclude_unset=True,
+    operation_id="counseling_note_detail",
+)
+def session_note_detail(request, reference_code: str):
+    from apps.counseling.projections import project_counselor_note_detail
+
+    prepare_api_operation(request, "counseling_note_detail")
+    actor = _actor(request)
+    payload = project_counselor_note_detail(
+        actor,
+        get_session_or_404(actor, reference_code),
+    )
     if payload is None:
         raise NotFoundError()
     return payload
@@ -1668,12 +1787,33 @@ def _urgent_outcome(urgent_support):
     exclude_unset=True,
     operation_id="counseling_urgent_list",
 )
-def list_urgent(request, page: PageQuery, page_size: PageSizeQuery):
+def list_urgent(
+    request,
+    page: PageQuery,
+    page_size: PageSizeQuery,
+    q: str | None = Query(default=None, max_length=120),
+    status: str | None = Query(default=None, max_length=400),
+    urgency_level: str | None = Query(default=None, max_length=40),
+    source_type: str | None = Query(default=None, max_length=40),
+    assignment: str = Query(default="all", max_length=20),
+    review_status: str | None = Query(default=None, max_length=60),
+    order: str = Query(default="recent", max_length=20),
+):
     prepare_api_operation(request, "counseling_urgent_list")
-    return counseling_queries.get_urgent_support_metadata_page(
-        _actor(request),
-        _page(page, page_size),
-    ).as_dict()
+    try:
+        return counseling_queries.get_urgent_support_metadata_page(
+            _actor(request),
+            _page(page, page_size),
+            q=q,
+            statuses=status,
+            urgency_level=urgency_level,
+            source_type=source_type,
+            assignment=assignment,
+            review_status=review_status,
+            order=order,
+        ).as_dict()
+    except ValueError as error:
+        raise ValidationError(field_errors={"filters": ["Invalid urgent-support filters."]}) from error
 
 
 @router.get(
@@ -1693,6 +1833,34 @@ def urgent_detail(request, reference_code: str):
     if payload is None:
         raise NotFoundError()
     return payload
+
+
+@router.get(
+    "/urgent-support/{reference_code}/counselor-options/",
+    response=UrgentSupportCounselorOptionPageSchema,
+    exclude_unset=True,
+    operation_id="counseling_urgent_counselor_options",
+)
+def urgent_counselor_options(
+    request,
+    reference_code: str,
+    page: PageQuery,
+    page_size: PageSizeQuery,
+    q: str | None = Query(default=None, max_length=80),
+):
+    from apps.counseling.selectors import get_urgent_support_request_by_reference_code
+
+    prepare_api_operation(request, "counseling_urgent_counselor_options")
+    actor = _actor(request)
+    urgent_support = get_urgent_support_request_by_reference_code(actor, reference_code)
+    if urgent_support is None:
+        raise NotFoundError()
+    return counseling_queries.get_urgent_support_options(
+        actor,
+        urgent_support,
+        q=q,
+        page=_page(page, page_size),
+    ).as_dict()
 
 
 @router.post(
@@ -1737,9 +1905,22 @@ def create_urgent_route(request, payload: UrgentCreateSchema):
 )
 def triage_urgent_route(request, reference_code: str, payload: UrgentTriageSchema):
     from apps.counseling.services import create_urgent_support_triage_session
+    from apps.counseling.selectors import get_urgent_support_request_by_reference_code
+    from apps.counseling.urgent_support_selectors import resolve_counselor_selection_token
 
     actor = _actor(request)
     data = _payload(payload)
+    selection_token = data.pop("counselor_selection_token", None)
+    if selection_token:
+        urgent_support = get_urgent_support_request_by_reference_code(actor, reference_code)
+        counselor = (
+            resolve_counselor_selection_token(actor, urgent_support, selection_token)
+            if urgent_support is not None
+            else None
+        )
+        if counselor is None:
+            raise ValidationError(field_errors={"counselor_selection_token": ["Invalid counselor selection."]})
+        data["assigned_counselor"] = counselor.pk
     command = UrgentSupportTriageCommand(
         assigned_counselor_id=data.pop("assigned_counselor", None),
         **data,
@@ -1767,7 +1948,7 @@ def _run_triage(actor, reference_code, command):
     exclude_unset=True,
     operation_id="counseling_urgent_review",
 )
-def review_urgent_route(request, reference_code: str, payload: ReviewSchema):
+def review_urgent_route(request, reference_code: str, payload: UrgentSupportReviewSchema):
     from apps.counseling.services import confirm_urgent_support_review
 
     actor = _actor(request)
@@ -1806,9 +1987,23 @@ def close_urgent_route(request, reference_code: str, payload: ClosureSchema):
 )
 def grant_access_route(request, reference_code: str, payload: AccessGrantSchema):
     from apps.counseling.services import grant_temporary_support_access
+    from apps.counseling.selectors import get_urgent_support_request_by_reference_code
+    from apps.counseling.urgent_support_selectors import resolve_counselor_selection_token
 
     actor = _actor(request)
-    command = TemporarySupportAccessCommand(**_payload(payload))
+    data = _payload(payload)
+    selection_token = data.pop("grantee_selection_token", None)
+    if selection_token:
+        urgent_support = get_urgent_support_request_by_reference_code(actor, reference_code)
+        counselor = (
+            resolve_counselor_selection_token(actor, urgent_support, selection_token)
+            if urgent_support is not None
+            else None
+        )
+        if counselor is None:
+            raise ValidationError(field_errors={"grantee_selection_token": ["Invalid counselor selection."]})
+        data["grantee_id"] = counselor.pk
+    command = TemporarySupportAccessCommand(**data)
     return _run(
         request,
         "counseling_urgent_access_grant",
@@ -1827,11 +2022,24 @@ def grant_access_route(request, reference_code: str, payload: AccessGrantSchema)
     exclude_unset=True,
     operation_id="counseling_urgent_access_revoke",
 )
-def revoke_access_route(request, payload: RevokeSchema):
+def revoke_access_route(request, payload: UrgentSupportRevokeSchema):
     from apps.counseling.services import revoke_temporary_support_access
+    from apps.counseling.selectors import get_urgent_support_requests_visible_to
+    from apps.counseling.urgent_support_selectors import resolve_grant_selection_token
 
     actor = _actor(request)
-    command = TemporarySupportRevokeCommand(**_payload(payload))
+    data = _payload(payload)
+    selection_token = data.pop("grant_selection_token", None)
+    if selection_token:
+        grant = None
+        for urgent_support in get_urgent_support_requests_visible_to(actor):
+            grant = resolve_grant_selection_token(actor, urgent_support, selection_token)
+            if grant is not None:
+                data["grant_id"] = grant.pk
+                break
+        if grant is None:
+            raise ValidationError(field_errors={"grant_selection_token": ["Invalid grant selection."]})
+    command = TemporarySupportRevokeCommand(**data)
     return _run(
         request,
         "counseling_urgent_access_revoke",

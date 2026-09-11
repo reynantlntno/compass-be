@@ -20,7 +20,9 @@ from apps.counseling.encryption import (
     read_student_visible_summary,
 )
 from apps.counseling.policies import (
+    can_request_recording_consent,
     can_view_counseling_case,
+    can_view_ecounseling_session,
     can_view_counseling_notes,
     can_view_routine_interview_evaluation,
     can_view_routine_interview_intake,
@@ -324,6 +326,65 @@ def project_staff_session_queue_metadata(actor, session) -> dict | None:
     return payload
 
 
+def project_staff_session_workspace_context(actor, session) -> dict | None:
+    """Return the bounded context used by the counselor session workspace.
+
+    This is intentionally narrower than the legacy staff session projection:
+    it contains no database identifiers, concern text, actor relations,
+    provider room data, or meeting credentials.  E-counseling and recording
+    facts are added only when the actor may view that specific online session.
+    """
+    if not session or is_student(actor):
+        return None
+
+    payload = project_staff_session_queue_metadata(actor, session)
+    if payload is None:
+        return None
+
+    from apps.counseling.models import RoutineInterviewRecord
+    from apps.counseling.selectors import get_ecounseling_session_for_counseling_session
+
+    payload.update(
+        {
+            "routine_interview_available": RoutineInterviewRecord.objects.filter(
+                session_id=session.pk,
+            ).exists(),
+            "ecounseling_reference_code": None,
+            "ecounseling_join_code": None,
+            "ecounseling_join_available": False,
+            "ecounseling_next_action": None,
+            "recording_consent_status": None,
+            "recording_requested": None,
+            "recording_controls_enabled": False,
+        }
+    )
+
+    ecounseling_session = get_ecounseling_session_for_counseling_session(actor, session)
+    if not ecounseling_session or not can_view_ecounseling_session(actor, ecounseling_session):
+        return payload
+
+    from apps.counseling.ecounseling_services import get_ecounseling_join_state
+    from apps.counseling.recording_policy import recording_availability_projection
+
+    join_state = get_ecounseling_join_state(actor, ecounseling_session)
+    recording_policy = recording_availability_projection()
+    payload.update(
+        {
+            "ecounseling_reference_code": ecounseling_session.reference_code,
+            "ecounseling_join_code": join_state.code,
+            "ecounseling_join_available": bool(join_state.available),
+            "ecounseling_next_action": join_state.next_action,
+            "recording_consent_status": ecounseling_session.recording_consent_status,
+            "recording_requested": bool(ecounseling_session.recording_requested),
+            "recording_controls_enabled": bool(
+                recording_policy.controls_available
+                and can_request_recording_consent(actor, ecounseling_session)
+            ),
+        }
+    )
+    return payload
+
+
 def project_student_session_metadata(actor, session) -> dict | None:
     """Return the owner-only student session metadata projection."""
     if not _student_owner_can_view(actor, session):
@@ -360,6 +421,21 @@ def project_counselor_note(actor, session) -> dict | None:
     if note is None:
         return None
     return {field: note[field] for field in COUNSELOR_NOTE_FIELDS}
+
+
+def project_counselor_note_detail(actor, session) -> dict | None:
+    """Return an authorized note projection, including an empty note state."""
+    if not session or not can_view_counseling_notes(actor, session):
+        return None
+    note = read_counselor_note(actor, session) or {}
+    return {
+        "student_visible_summary": note.get("student_visible_summary", ""),
+        "counselor_narrative": note.get("counselor_narrative", ""),
+        "recommendations": note.get("recommendations", ""),
+        "special_concerns": note.get("special_concerns", ""),
+        "follow_up_needed": bool(note.get("follow_up_needed", False)),
+        "follow_up_notes": note.get("follow_up_notes", ""),
+    }
 
 
 def project_case_metadata(actor, counseling_case) -> dict | None:
