@@ -28,6 +28,7 @@ from apps.access_control.scopes import (
     build_workflow_authority_scope_q,
     get_live_counselor_coverages,
 )
+from apps.access_control.display import safe_student_display_label
 from apps.appointments.models import (
     Appointment,
     AppointmentModeChoices,
@@ -72,17 +73,15 @@ _STUDENT_FIELDS = frozenset({
     "confirmed_start_time",
     "confirmed_end_time",
 })
-_COVERAGE_FIELDS = _STUDENT_FIELDS | {"reason"}
-_ASSIGNED_FIELDS = _STUDENT_FIELDS | {"reason", "cancellation_reason", "internal_notes"}
-_OPERATIONAL_STAFF_FIELDS = _STUDENT_FIELDS | {"reason"}
-# Office metadata may identify workflow ownership, but never crosses the
-# boundary as a Django relation.  Foreign-key IDs are scalar and are still
-# safe for the scoped operational workspace to use for follow-up actions.
-_OFFICE_METADATA_FIELDS = _STUDENT_FIELDS | {
-    "assigned_counselor_id",
-    "preferred_counselor_id",
-    "reviewed_by_id",
-}
+_QUEUE_IDENTITY_FIELDS = frozenset({
+    "student_display_name",
+    "student_number",
+    "assignment_state",
+})
+_COVERAGE_FIELDS = _STUDENT_FIELDS | _QUEUE_IDENTITY_FIELDS | {"reason"}
+_ASSIGNED_FIELDS = _STUDENT_FIELDS | _QUEUE_IDENTITY_FIELDS | {"reason", "cancellation_reason", "internal_notes"}
+_OPERATIONAL_STAFF_FIELDS = _STUDENT_FIELDS | _QUEUE_IDENTITY_FIELDS | {"reason"}
+_OFFICE_METADATA_FIELDS = _STUDENT_FIELDS | _QUEUE_IDENTITY_FIELDS
 _PRIVATE_ALL_FIELDS = _STUDENT_FIELDS | {
     "reason", "cancellation_reason", "decline_reason", "internal_notes",
 }
@@ -118,7 +117,22 @@ def appointment_view_projection(user, appointment: Appointment) -> dict | None:
     allowed = _projection_field_set(user, appointment)
     payload = {}
     for field in allowed:
-        payload[field] = getattr(appointment, field)
+        if field == "student_display_name":
+            profile = getattr(appointment.student, "student_profile", None)
+            payload[field] = safe_student_display_label(profile)
+        elif field == "student_number":
+            profile = getattr(appointment.student, "student_profile", None)
+            value = getattr(profile, "student_number", None)
+            payload[field] = str(value).strip()[:50] if value else None
+        elif field == "assignment_state":
+            if appointment.assigned_counselor_id == getattr(user, "pk", None):
+                payload[field] = "Assigned to you"
+            elif appointment.assigned_counselor_id:
+                payload[field] = "Assigned"
+            else:
+                payload[field] = "Unassigned"
+        else:
+            payload[field] = getattr(appointment, field)
     return payload
 
 
@@ -168,7 +182,18 @@ def get_appointments_visible_to(user) -> models.QuerySet:
         ).distinct()
 
     if is_gco_staff(user):
-        scope_q = build_workflow_authority_scope_q(
+        queue_scope_q = build_workflow_authority_scope_q(
+            user,
+            capability=Capability.APPOINTMENTS_QUEUE_VIEW,
+            field_map={
+                "campus": "student__student_profile__campus",
+                "college": "student__student_profile__college",
+                "department": "student__student_profile__department",
+                "program": "student__student_profile__program",
+            },
+            counselor_field="assigned_counselor_id",
+        )
+        review_scope_q = build_workflow_authority_scope_q(
             user,
             capability=Capability.APPOINTMENTS_REVIEW,
             field_map={
@@ -179,7 +204,9 @@ def get_appointments_visible_to(user) -> models.QuerySet:
             },
             counselor_field="assigned_counselor_id",
         )
-        return Appointment.objects.defer(*APPOINTMENT_SENSITIVE_FIELDS).filter(scope_q).distinct()
+        return Appointment.objects.defer(*APPOINTMENT_SENSITIVE_FIELDS).filter(
+            queue_scope_q | review_scope_q,
+        ).distinct()
 
     return Appointment.objects.none()
 
@@ -204,6 +231,12 @@ def get_counselor_appointment_queue(user) -> models.QuerySet:
     if not is_counselor(user) and not is_gco_staff(user) and not has_fixed_capability(
         user,
         Capability.APPOINTMENTS_REVIEW,
+    ):
+        return Appointment.objects.none()
+
+    if is_gco_staff(user) and not (
+        has_capability(user, Capability.APPOINTMENTS_QUEUE_VIEW)
+        or has_capability(user, Capability.APPOINTMENTS_REVIEW)
     ):
         return Appointment.objects.none()
 

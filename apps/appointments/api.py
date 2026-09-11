@@ -11,7 +11,7 @@ from datetime import date as date_type
 from datetime import datetime as datetime_type
 from datetime import time as time_type
 
-from ninja import Router, Schema
+from ninja import Query, Router, Schema
 
 from apps.appointments import queries as appointments_queries
 from apps.appointments.commands import (
@@ -65,12 +65,12 @@ class AppointmentProjectionSchema(Schema):
     confirmed_date: date_type | None = None
     confirmed_start_time: time_type | None = None
     confirmed_end_time: time_type | None = None
+    student_display_name: str | None = None
+    student_number: str | None = None
+    assignment_state: str | None = None
     reason: str | None = None
     cancellation_reason: str | None = None
     internal_notes: str | None = None
-    assigned_counselor_id: int | None = None
-    preferred_counselor_id: int | None = None
-    reviewed_by_id: int | None = None
 
 
 class AppointmentPageResultSchema(PageResultSchema):
@@ -137,7 +137,7 @@ class ScheduleSchema(Schema):
     internal_notes: str = ""
 
 
-class ReasonSchema(Schema):
+class AppointmentReasonSchema(Schema):
     reason: str
 
 
@@ -252,12 +252,35 @@ def _run(request, operation_id, payload, operation):
 
 
 @router.get("/", response=AppointmentPageResultSchema, operation_id="appointments_list")
-def list_appointments(request, page: PageQuery, page_size: PageSizeQuery):
+def list_appointments(
+    request,
+    page: PageQuery,
+    page_size: PageSizeQuery,
+    q: str | None = Query(default=None, max_length=120),
+    status: str | None = Query(default=None, max_length=400),
+    appointment_type: str | None = Query(default=None),
+    appointment_mode: str | None = Query(default=None),
+    assignment: str = Query(default="all"),
+    date_from: date_type | None = Query(default=None),
+    date_to: date_type | None = Query(default=None),
+    order: str = Query(default="recent"),
+):
     prepare_api_operation(request, "appointments_list")
-    return appointments_queries.scoped_appointment_page(
-        _actor(request),
-        _page(page, page_size),
-    ).as_dict()
+    try:
+        return appointments_queries.scoped_appointment_page(
+            _actor(request),
+            _page(page, page_size),
+            q=q,
+            statuses=status,
+            appointment_type=appointment_type,
+            appointment_mode=appointment_mode,
+            assignment=assignment,
+            date_from=date_from,
+            date_to=date_to,
+            order=order,
+        ).as_dict()
+    except ValueError as error:
+        raise ValidationError(field_errors={"filters": ["Invalid appointment filters."]}) from error
 
 
 @router.get("/slots/", response=AvailableSlotPageResultSchema, operation_id="appointments_available_slots")
@@ -388,7 +411,7 @@ def reassign(request, reference_code: str, payload: AssignmentSchema):
     )
 
 @router.post("/{reference_code}/cancel/", response=AppointmentMutationResponseSchema, operation_id="appointments_cancel")
-def cancel(request, reference_code: str, payload: ReasonSchema):
+def cancel(request, reference_code: str, payload: AppointmentReasonSchema):
     from apps.orchestration.commands import LinkedAppointmentCommand
     from apps.orchestration.use_cases import cancel_appointment_with_linked_session
 
@@ -407,7 +430,7 @@ def cancel(request, reference_code: str, payload: ReasonSchema):
 
 
 @router.post("/{reference_code}/late-cancellation/", response=AppointmentMutationResponseSchema, operation_id="appointments_late_cancellation_request")
-def request_late_cancellation_route(request, reference_code: str, payload: ReasonSchema):
+def request_late_cancellation_route(request, reference_code: str, payload: AppointmentReasonSchema):
     actor = _actor(request)
     command = LateCancellationRequestCommand(**_payload(payload))
     return _run(

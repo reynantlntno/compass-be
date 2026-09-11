@@ -19,6 +19,7 @@ from apps.access_control.capabilities import Capability
 from apps.access_control.choices import GrantReasonCode, ScopeMode
 from apps.access_control.models import CounselorCoverage, WorkflowAuthorityGrant
 from apps.accounts.models import RoleChoices, User
+from apps.common.contracts import PageRequest
 from apps.appointments.models import Appointment, AppointmentModeChoices, AppointmentStatusChoices
 from apps.appointments.commands import (
     AppointmentCancellationCommand,
@@ -38,6 +39,7 @@ from apps.appointments.policies import (
     can_view_appointment_queue,
     can_view_appointment_private_detail,
 )
+from apps.appointments.queries import scoped_appointment_page
 from apps.appointments.selectors import (
     assert_fields_visible,
     appointment_view_projection,
@@ -217,11 +219,15 @@ class HeadGuidanceReadTests(TestCase):
         self.assertNotIn("internal_notes", projection)
         self.assertNotIn("decline_reason", projection)
 
-    def test_head_metadata_projection_contains_only_json_safe_relation_ids(self):
+    def test_head_metadata_projection_contains_safe_queue_identity_only(self):
         head = _head(email="head-json-safe@example.test")
         appt = _appointment(student=self.student, assigned=head)
         projection = appointment_view_projection(head, appt)
-        self.assertEqual(projection["assigned_counselor_id"], head.pk)
+        self.assertEqual(projection["student_display_name"], "Test User")
+        self.assertEqual(projection["assignment_state"], "Assigned to you")
+        self.assertNotIn("assigned_counselor_id", projection)
+        self.assertNotIn("preferred_counselor_id", projection)
+        self.assertNotIn("reviewed_by_id", projection)
         self.assertNotIn("assigned_counselor", projection)
         self.assertNotIn("preferred_counselor", projection)
         self.assertNotIn("reviewed_by", projection)
@@ -233,6 +239,127 @@ class HeadGuidanceReadTests(TestCase):
         projection = appointment_view_projection(head, appt)
         for invented in ("urgent_support", "queue_position", "unassigned_flag"):
             self.assertNotIn(invented, projection)
+
+
+class AppointmentQueueQueryTests(TestCase):
+    """Bounded queue filters never widen the actor's appointment scope."""
+
+    def setUp(self):
+        self.head = _head(email="queue-head@example.test")
+        self.assigned = _build_user(email="queue-assigned@example.test", role=RoleChoices.COUNSELOR)
+        self.students = []
+        for index, (first_name, number) in enumerate(
+            (("Alpha", "2026-0001"), ("Bravo", "2026-0002"), ("Outside", "2026-0003")),
+            start=1,
+        ):
+            student = _build_user(
+                email=f"queue-student-{index}@example.test",
+                role=RoleChoices.STUDENT,
+            )
+            student.first_name = first_name
+            student.last_name = "Student"
+            student.save(update_fields=["first_name", "last_name"])
+            StudentProfile.objects.create(
+                user=student,
+                student_number=number,
+                campus="Main Campus",
+                college="CCMS",
+            )
+            self.students.append(student)
+
+        today = timezone.localdate()
+        self.today = _appointment(
+            student=self.students[0],
+            assigned=self.head,
+            reference_code="APT-QUEUE-TODAY",
+            status=AppointmentStatusChoices.APPROVED,
+        )
+        self.today.requested_date = today - timedelta(days=10)
+        self.today.confirmed_date = today
+        self.today.save(update_fields=["requested_date", "confirmed_date"])
+        self.upcoming = _appointment(
+            student=self.students[1],
+            reference_code="APT-QUEUE-UPCOMING",
+            status=AppointmentStatusChoices.SCHEDULED,
+        )
+        self.upcoming.requested_date = today + timedelta(days=3)
+        self.upcoming.save(update_fields=["requested_date"])
+        self.outside = _appointment(
+            student=self.students[2],
+            reference_code="APT-QUEUE-OUTSIDE",
+            status=AppointmentStatusChoices.COMPLETED,
+        )
+        self.outside.requested_date = today - timedelta(days=2)
+        self.outside.save(update_fields=["requested_date"])
+
+    def test_search_matches_reference_and_authorized_student_identity(self):
+        by_reference = scoped_appointment_page(
+            self.head, PageRequest(page=1, page_size=20), q="APT-QUEUE-TODAY"
+        )
+        by_name = scoped_appointment_page(
+            self.head, PageRequest(page=1, page_size=20), q="Alpha Student"
+        )
+        by_number = scoped_appointment_page(
+            self.head, PageRequest(page=1, page_size=20), q="2026-0002"
+        )
+        self.assertEqual([row["reference_code"] for row in by_reference.items], [self.today.reference_code])
+        self.assertEqual([row["reference_code"] for row in by_name.items], [self.today.reference_code])
+        self.assertEqual([row["reference_code"] for row in by_number.items], [self.upcoming.reference_code])
+
+    def test_search_does_not_match_email_or_student_data_outside_scope(self):
+        own_reference = scoped_appointment_page(
+            self.students[0], PageRequest(page=1, page_size=20), q="queue-student-1@example.test"
+        )
+        outside_name = scoped_appointment_page(
+            self.assigned, PageRequest(page=1, page_size=20), q="Outside Student"
+        )
+        self.assertEqual(own_reference.total, 0)
+        self.assertEqual(outside_name.total, 0)
+
+    def test_effective_date_uses_confirmed_date_before_requested_date(self):
+        result = scoped_appointment_page(
+            self.head,
+            PageRequest(page=1, page_size=20),
+            date_from=timezone.localdate(),
+            date_to=timezone.localdate(),
+        )
+        self.assertEqual([row["reference_code"] for row in result.items], [self.today.reference_code])
+
+    def test_status_assignment_order_and_pagination_are_bounded(self):
+        status_result = scoped_appointment_page(
+            self.head, PageRequest(page=1, page_size=20), statuses="APPROVED,SCHEDULED"
+        )
+        assigned_result = scoped_appointment_page(
+            self.head, PageRequest(page=1, page_size=20), assignment="mine"
+        )
+        upcoming_result = scoped_appointment_page(
+            self.head,
+            PageRequest(page=1, page_size=20),
+            statuses="APPROVED,SCHEDULED",
+            order="upcoming",
+        )
+        page_result = scoped_appointment_page(self.head, PageRequest(page=1, page_size=1))
+        self.assertEqual(page_result.total, 3)
+        self.assertEqual(len(page_result.items), 1)
+        self.assertEqual(
+            {row["reference_code"] for row in status_result.items},
+            {self.today.reference_code, self.upcoming.reference_code},
+        )
+        self.assertEqual([row["reference_code"] for row in assigned_result.items], [self.today.reference_code])
+        self.assertEqual(
+            [row["reference_code"] for row in upcoming_result.items],
+            [self.today.reference_code, self.upcoming.reference_code],
+        )
+
+    def test_invalid_filters_fail_closed(self):
+        with self.assertRaises(ValueError):
+            scoped_appointment_page(self.head, q="x", appointment_mode="PHONE")
+        with self.assertRaises(ValueError):
+            scoped_appointment_page(
+                self.head,
+                date_from=timezone.localdate() + timedelta(days=1),
+                date_to=timezone.localdate(),
+            )
 
 
 class GCOStaffReadTests(TestCase):
@@ -266,6 +393,16 @@ class GCOStaffReadTests(TestCase):
         visible_ids = set(get_appointments_visible_to(self.staff).values_list("pk", flat=True))
         self.assertIn(self.appt.pk, visible_ids)
         self.assertNotIn(outside.pk, visible_ids)
+
+    def test_queue_view_grant_exposes_safe_rows_without_private_detail(self):
+        _grant_staff(self.staff, Capability.APPOINTMENTS_QUEUE_VIEW, campus="Main Campus", college="CCMS")
+        self.assertTrue(can_view_appointment_queue(self.staff))
+        self.assertTrue(can_view_appointment(self.staff, self.appt))
+        projection = appointment_view_projection(self.staff, self.appt)
+        self.assertIn("student_display_name", projection)
+        self.assertNotIn("reason", projection)
+        self.assertNotIn("internal_notes", projection)
+        self.assertIn(self.appt.pk, get_appointments_visible_to(self.staff).values_list("pk", flat=True))
 class SubmitAppointmentTests(TestCase):
     """Dedicated owner-only can_submit_appointment (contract boundary)."""
 

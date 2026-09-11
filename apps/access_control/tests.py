@@ -109,6 +109,7 @@ class AuthorityResolutionTests(TestCase):
     def test_counselor_has_direct_baseline_but_no_optional_authority(self):
         context = build_authority_context(self.counselor)
         self.assertTrue(resolve_capability(context, Capability.REPORTS_RUN))
+        self.assertTrue(resolve_capability(context, Capability.APPOINTMENTS_QUEUE_VIEW))
         self.assertFalse(resolve_capability(context, Capability.GOOD_MORAL_APPROVE))
 
     def test_head_has_exact_fixed_supervision_capabilities(self):
@@ -117,11 +118,25 @@ class AuthorityResolutionTests(TestCase):
             self.assertTrue(resolve_capability(context, capability), capability)
         self.assertTrue(resolve_capability(context, Capability.REPORTS_RUN))
         self.assertTrue(resolve_capability(context, Capability.STUDENT_RECORDS_VIEW_SCOPED))
+        self.assertTrue(resolve_capability(context, Capability.APPOINTMENTS_QUEUE_VIEW))
         self.assertFalse(resolve_capability(context, Capability.TOKENS_REVOKE))
 
     def test_gco_staff_has_no_role_wide_business_authority(self):
         self.assertFalse(has_capability(self.staff, Capability.APPOINTMENTS_REVIEW))
+        self.assertFalse(has_capability(self.staff, Capability.APPOINTMENTS_QUEUE_VIEW))
         self.assertFalse(has_capability(self.staff, Capability.REPORTS_RUN))
+
+    def test_gco_staff_queue_visibility_can_be_granted_in_scope(self):
+        WorkflowAuthorityGrant.objects.create(
+            grantee=self.staff,
+            capability=Capability.APPOINTMENTS_QUEUE_VIEW.value,
+            scope_mode=ScopeMode.EXPLICIT_ORGANIZATION.value,
+            college="CCMS",
+            valid_from=self.today,
+            granted_by=self.head,
+            grant_reason_code=GrantReasonCode.LOCAL_WORKFLOW,
+        )
+        self.assertTrue(has_capability(self.staff, Capability.APPOINTMENTS_QUEUE_VIEW, target=self.profile))
 
     def test_gco_staff_explicit_organization_grant_needs_no_counselor_link(self):
         WorkflowAuthorityGrant.objects.create(

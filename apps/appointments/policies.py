@@ -89,15 +89,20 @@ def _has_counselor_coverage_for_appointment(user, appointment: Appointment) -> b
     return counselor_has_live_coverage_for_student(user, student_profile)
 
 
-def _is_staff_assigned_to_appointment_scope(user, appointment: Appointment | None = None) -> bool:
+def _is_staff_assigned_to_appointment_scope(
+    user,
+    appointment: Appointment | None = None,
+    *,
+    capability=Capability.APPOINTMENTS_REVIEW,
+) -> bool:
     """Check if GCO Staff assignment matches the appointment workflow and student scope."""
-    grants = get_active_workflow_authority_grants(user, capability=Capability.APPOINTMENTS_REVIEW)
+    grants = get_active_workflow_authority_grants(user, capability=capability)
     if appointment is None:
         return grants.exists()
 
     student_profile = _get_student_profile_for_appointment(appointment)
     return workflow_authority_authorizes_record(
-        user, capability=Capability.APPOINTMENTS_REVIEW,
+        user, capability=capability,
         student_profile=student_profile,
         assigned_counselor=appointment.assigned_counselor,
     )
@@ -117,7 +122,13 @@ def can_view_appointment_queue(user) -> bool:
             or user.assigned_appointments.exists()
         )
     if is_gco_staff(user):
-        return _is_staff_assigned_to_appointment_scope(user)
+        return bool(
+            _is_staff_assigned_to_appointment_scope(
+                user,
+                capability=Capability.APPOINTMENTS_QUEUE_VIEW,
+            )
+            or _is_staff_assigned_to_appointment_scope(user)
+        )
     return False
 
 
@@ -250,7 +261,14 @@ def can_view_appointment(user, appointment: Appointment) -> bool:
         return True
 
     # GCO Staff assigned to matching appointment queue scope
-    if is_gco_staff(user) and _is_staff_assigned_to_appointment_scope(user, appointment):
+    if is_gco_staff(user) and (
+        _is_staff_assigned_to_appointment_scope(
+            user,
+            appointment,
+            capability=Capability.APPOINTMENTS_QUEUE_VIEW,
+        )
+        or _is_staff_assigned_to_appointment_scope(user, appointment)
+    ):
         return True
 
     return False

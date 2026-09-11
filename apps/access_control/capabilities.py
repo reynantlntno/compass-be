@@ -64,6 +64,7 @@ class Capability(str, Enum):
     HEAD_GUIDANCE_DESIGNATION_MANAGE = "head_guidance_designation.manage"
 
     APPOINTMENTS_ASSIGN = "appointments.assign"
+    APPOINTMENTS_QUEUE_VIEW = "appointments.queue.view"
     APPOINTMENTS_REVIEW = "appointments.review"
     APPOINTMENTS_SCHEDULE = "appointments.schedule"
     APPOINTMENTS_CANCEL = "appointments.cancel"
@@ -210,6 +211,17 @@ def _declare(capabilities, *, sources, grant_roles=(), grant_scopes=(), expiry=F
 _declare(
     (Capability.STUDENT_RECORDS_VIEW_SCOPED,),
     sources={AuthoritySource.COUNSELOR_BASELINE}, bundle="students",
+)
+_declare(
+    (Capability.APPOINTMENTS_QUEUE_VIEW,),
+    sources={
+        AuthoritySource.COUNSELOR_BASELINE,
+        AuthoritySource.HEAD_FIXED,
+        AuthoritySource.ACCOUNT_GRANT,
+    },
+    grant_roles={ROLE_GCO_STAFF},
+    grant_scopes=_GCO_SCOPE,
+    bundle="appointments",
 )
 _declare(
     (Capability.REPORTS_VIEW_DEFINITIONS, Capability.REPORTS_RUN),
