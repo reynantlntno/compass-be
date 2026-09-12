@@ -363,6 +363,9 @@ def _register_form_vertical_operations() -> None:
         "exit_interviews_list",
         "exit_interviews_detail",
         "exit_interviews_sensitive_detail",
+        "exit_interviews_queue_list",
+        "exit_interviews_queue_detail",
+        "exit_interviews_queue_sensitive_detail",
         "exit_interviews_status",
         "exit_interviews_assignments_list",
         "graduate_tracer_list",
@@ -421,7 +424,14 @@ _register_form_vertical_operations()
 
 def _register_inventory_operations() -> None:
     # Ordinary owner reads are protected by authentication/session only.
-    for operation_id in ("inventory_list", "inventory_detail", "inventory_history"):
+    for operation_id in (
+        "inventory_list",
+        "inventory_detail",
+        "inventory_history",
+        "inventory_queue_list",
+        "inventory_queue_detail",
+        "inventory_queue_sensitive_detail",
+    ):
         API_OPERATION_SPECS[operation_id] = ApiOperationSpec(operation_id)
     # Student-owned mutations stay idempotent without the staff write class.
     for operation_id in (

@@ -16,7 +16,9 @@ from apps.common.exceptions import (
     ValidationError,
     WorkflowError,
 )
+from apps.common.contracts import PageRequest
 from apps.inventory import queries as inventory_queries
+from apps.inventory import queue as inventory_queue
 from apps.inventory.commands import (
     InventoryDraftCommand,
     InventoryDraftCreateCommand,
@@ -456,6 +458,109 @@ class InventoryConfidentialityAccessTests(TestCase):
             "answers",
         ):
             self.assertNotIn(forbidden, payload)
+
+    def test_staff_queue_is_scoped_and_keeps_answers_out_of_metadata(self):
+        page = inventory_queue.queue_page(
+            self.counselor,
+            PageRequest(page=1, page_size=20),
+            query="inventory-conf-owner",
+        )
+        self.assertEqual(page["total"], 0)
+
+        page = inventory_queue.queue_page(
+            self.counselor,
+            PageRequest(page=1, page_size=20),
+            academic_year="2025-2026",
+            revision="2.1.0",
+        )
+        self.assertEqual(page["total"], 1)
+        self.assertEqual(
+            set(page["items"][0]),
+            {
+                "snapshot_id",
+                "student_display_name",
+                "student_number",
+                "academic_year",
+                "schema_key",
+                "schema_version",
+                "status",
+                "submitted_at",
+                "reopened_at",
+                "updated_at",
+                "review_state",
+            },
+        )
+        detail = inventory_queue.queue_detail(self.counselor, self.submitted.pk)
+        self.assertIsNotNone(detail)
+        self.assertNotIn("snapshot_id", detail)
+        self.assertNotIn("answers", detail)
+        sensitive = inventory_queue.queue_sensitive_detail(self.counselor, self.submitted.pk)
+        self.assertEqual(sensitive["answers"], {"personal_data": {"safe": "value"}})
+
+    def test_staff_queue_rejects_unsupported_status_and_preserves_scope(self):
+        with self.assertRaises(ValidationError):
+            inventory_queue.queue_page(
+                self.counselor,
+                PageRequest(page=1, page_size=20),
+                statuses=InventoryStatusChoices.DRAFT,
+            )
+        self.assertEqual(
+            inventory_queue.queue_page(
+                self.out_of_scope,
+                PageRequest(page=1, page_size=20),
+            )["total"],
+            0,
+        )
+
+        gco = User.objects.create_user(
+            email="inventory-queue-gco@example.test",
+            password="correct-horse-battery-staple",
+            role=RoleChoices.GCO_STAFF,
+        )
+        self.assertEqual(
+            inventory_queue.queue_page(gco, PageRequest(page=1, page_size=20))["total"],
+            0,
+        )
+
+    def test_queue_http_contract_keeps_snapshot_key_and_answers_out_of_metadata(self):
+        headers = {
+            "HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(self.counselor, assurance_verified=True).access_token}"
+        }
+        page = self.client.get("/api/v1/inventory/queue/", **headers)
+        self.assertEqual(page.status_code, 200, page.content)
+        payload = page.json()
+        self.assertEqual(set(payload), {"items", "page", "page_size", "total"})
+        self.assertEqual(payload["total"], 1)
+        row = payload["items"][0]
+        self.assertEqual(row["snapshot_id"], self.submitted.pk)
+        for forbidden in (
+            "data",
+            "data_encrypted",
+            "reopen_reason",
+            "reopen_reason_encrypted",
+            "correction_notes",
+            "correction_notes_encrypted",
+            "student_profile_id",
+            "control_number",
+            "answers",
+        ):
+            self.assertNotIn(forbidden, row)
+
+        detail = self.client.get(f"/api/v1/inventory/queue/{self.submitted.pk}/", **headers)
+        self.assertEqual(detail.status_code, 200)
+        self.assertNotIn("snapshot_id", detail.json())
+        self.assertNotIn("answers", detail.json())
+
+        sensitive = self.client.get(f"/api/v1/inventory/queue/{self.submitted.pk}/sensitive/", **headers)
+        self.assertEqual(sensitive.status_code, 200)
+        self.assertEqual(sensitive.json()["answers"], {"personal_data": {"safe": "value"}})
+
+        # A reopened snapshot must never expose answer bodies to staff.
+        StudentInventorySnapshot.objects.filter(pk=self.submitted.pk).update(
+            status=InventoryStatusChoices.REOPENED_FOR_CORRECTION
+        )
+        reopened = self.client.get(f"/api/v1/inventory/queue/{self.submitted.pk}/sensitive/", **headers)
+        self.assertEqual(reopened.status_code, 404)
 
 
 class InventoryReopenAuthorityTests(TestCase):

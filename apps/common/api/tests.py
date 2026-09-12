@@ -356,6 +356,7 @@ class ApiOperationRegistryTests(SimpleTestCase):
             "content_visible_resources", "content_workspace", "content_workspace_detail",
             "profiles_me", "profiles_support_directory",
             "inventory_list", "inventory_detail", "inventory_history",
+            "inventory_queue_list", "inventory_queue_detail", "inventory_queue_sensitive_detail",
             "inventory_draft_create", "inventory_draft_save", "inventory_draft_save_patch",
             "inventory_submit",
             "inventory_reopen",
@@ -438,6 +439,7 @@ class ApiOperationRegistryTests(SimpleTestCase):
             "form_collection_invitation_revoke", "form_collection_manual_match_link",
             "form_collection_manual_match_reject", "form_collection_invitation_verify",
             "exit_interviews_list", "exit_interviews_detail", "exit_interviews_sensitive_detail",
+            "exit_interviews_queue_list", "exit_interviews_queue_detail", "exit_interviews_queue_sensitive_detail",
             "exit_interviews_status", "exit_interviews_assignments_list", "exit_interviews_start",
             "exit_interviews_draft_save", "exit_interviews_submit", "exit_interviews_acknowledge",
             "exit_interviews_assignment_create", "exit_interviews_reopen", "exit_interviews_void",
@@ -954,6 +956,7 @@ class ApiResponseDocumentationTests(SimpleTestCase):
                 "get",
             ),
             "exit_interviews_list": ("/api/v1/exit-interviews/", "get"),
+            "exit_interviews_queue_list": ("/api/v1/exit-interviews/queue/", "get"),
             "exit_interviews_assignments_list": ("/api/v1/exit-interviews/assignments/", "get"),
             "form_collections_list": ("/api/v1/form-collections/", "get"),
             "form_collection_batches_list": ("/api/v1/form-collections/{collection_id}/batches/", "get"),
@@ -966,6 +969,7 @@ class ApiResponseDocumentationTests(SimpleTestCase):
             "imports_preview": ("/api/v1/imports/{batch_id}/preview/", "get"),
             "imports_invitation_list": ("/api/v1/imports/{batch_id}/invitations/", "get"),
             "inventory_list": ("/api/v1/inventory/", "get"),
+            "inventory_queue_list": ("/api/v1/inventory/queue/", "get"),
             "inventory_history": ("/api/v1/inventory/{snapshot_id}/history/", "get"),
             "me_activity_list": ("/api/v1/me/activity/", "get"),
             "me_sessions_list": ("/api/v1/me/sessions/", "get"),
@@ -1029,7 +1033,7 @@ class ApiResponseDocumentationTests(SimpleTestCase):
                 >= {"page", "page_size"}
             )
 
-        self.assertEqual(len(expected_paths), 81)
+        self.assertEqual(len(expected_paths), 83)
         self.assertEqual(
             {
                 operation_id

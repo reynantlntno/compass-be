@@ -18,6 +18,7 @@ from apps.common.api.schemas import PageResultSchema
 from apps.common.contracts import ContractValidationError, to_json_object
 from apps.common.exceptions import NotFoundError, ValidationError
 from apps.inventory import queries as inventory_queries
+from apps.inventory import queue as inventory_queue
 from apps.inventory.commands import (
     InventoryDraftCommand,
     InventoryDraftCreateCommand,
@@ -59,6 +60,40 @@ class InventorySnapshotSchema(Schema):
 
 class InventoryPageResultSchema(PageResultSchema):
     items: list[InventorySnapshotSchema]
+
+
+class InventoryQueueItemSchema(Schema):
+    """Staff queue projection; ``snapshot_id`` is request-local only."""
+
+    snapshot_id: int
+    student_display_name: str
+    student_number: str | None = None
+    academic_year: str
+    schema_key: str
+    schema_version: str
+    status: str
+    submitted_at: datetime_type | None = None
+    reopened_at: datetime_type | None = None
+    updated_at: datetime_type | None = None
+    review_state: str
+
+
+class InventoryQueuePageResultSchema(PageResultSchema):
+    items: list[InventoryQueueItemSchema]
+
+
+class InventoryQueueDetailSchema(Schema):
+    student_display_name: str
+    student_number: str | None = None
+    academic_year: str
+    schema_key: str
+    schema_version: str
+    status: str
+    submitted_at: datetime_type | None = None
+    reopened_at: datetime_type | None = None
+    updated_at: datetime_type | None = None
+    review_state: str
+    answers: dict[str, object] | None = None
 
 
 class InventoryHistoryEventSchema(Schema):
@@ -136,6 +171,57 @@ def _replay(key):
 def list_inventory(request, page: PageQuery, page_size: PageSizeQuery):
     prepare_api_operation(request, "inventory_list")
     return inventory_queries.scoped_snapshot_page(_actor(request), _page(page, page_size))
+
+
+@router.get("/queue/", response=InventoryQueuePageResultSchema, operation_id="inventory_queue_list")
+def list_inventory_queue(
+    request,
+    page: PageQuery,
+    page_size: PageSizeQuery,
+    q: str = "",
+    status: str = "",
+    academic_year: str = "",
+    revision: str = "",
+    order: str = "recent",
+):
+    prepare_api_operation(request, "inventory_queue_list")
+    return inventory_queue.queue_page(
+        _actor(request),
+        _page(page, page_size),
+        query=q,
+        statuses=status,
+        academic_year=academic_year,
+        revision=revision,
+        order=order,
+    )
+
+
+@router.get(
+    "/queue/{snapshot_id}/",
+    response=InventoryQueueDetailSchema,
+    exclude_unset=True,
+    operation_id="inventory_queue_detail",
+)
+def inventory_queue_detail(request, snapshot_id: int):
+    prepare_api_operation(request, "inventory_queue_detail")
+    detail = inventory_queue.queue_detail(_actor(request), snapshot_id)
+    if detail is None:
+        raise NotFoundError()
+    return detail
+
+
+@router.get(
+    "/queue/{snapshot_id}/sensitive/",
+    response=InventoryQueueDetailSchema,
+    exclude_unset=True,
+    operation_id="inventory_queue_sensitive_detail",
+)
+def inventory_queue_sensitive_detail(request, snapshot_id: int):
+    prepare_api_operation(request, "inventory_queue_sensitive_detail")
+    detail = inventory_queue.queue_sensitive_detail(_actor(request), snapshot_id)
+    if detail is None:
+        raise NotFoundError()
+    return detail
 
 
 @router.get("/{snapshot_id}/history/", response=InventoryHistoryPageResultSchema, operation_id="inventory_history")

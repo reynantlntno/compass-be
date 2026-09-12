@@ -21,6 +21,7 @@ from apps.common.exceptions import NotFoundError, ValidationError
 from apps.common.form_values import ValidatedAnswerSet
 from apps.common.verified_access import VerifiedFormAccessPrincipal
 from apps.exit_interviews import projections, queries
+from apps.exit_interviews import queue as exit_interview_queue
 from apps.exit_interviews.commands import (
     ExitInterviewAcknowledgeCommand,
     ExitInterviewAssignmentCommand,
@@ -88,6 +89,32 @@ class ExitInterviewDetailSchema(ExitInterviewResponseSchema):
 
 class ExitInterviewResponsePageSchema(PageResultSchema):
     items: list[ExitInterviewResponseSchema]
+
+
+class ExitInterviewQueueItemSchema(Schema):
+    """Safe staff queue projection without database or actor identifiers."""
+
+    reference_code: str
+    student_display_name: str
+    student_number: str | None = None
+    academic_year: str
+    graduation_year_snapshot: str
+    form_code: str
+    form_revision: str
+    form_title: str
+    status: str
+    submitted_at: datetime | None = None
+    counselor_acknowledged_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ExitInterviewQueuePageSchema(PageResultSchema):
+    items: list[ExitInterviewQueueItemSchema]
+
+
+class ExitInterviewQueueDetailSchema(ExitInterviewQueueItemSchema):
+    answers: dict[str, object] | None = None
 
 
 class ExitInterviewAssignmentSchema(Schema):
@@ -265,6 +292,62 @@ def student_status(request):
 def list_assignments(request, page: PageQuery, page_size: PageSizeQuery):
     prepare_api_operation(request, "exit_interviews_assignments_list")
     return queries.assignment_page(_actor(request), _page(page, page_size)).as_dict()
+
+
+@router.get(
+    "/queue/",
+    response=ExitInterviewQueuePageSchema,
+    exclude_unset=True,
+    operation_id="exit_interviews_queue_list",
+)
+def list_exit_interview_queue(
+    request,
+    page: PageQuery,
+    page_size: PageSizeQuery,
+    q: str = "",
+    status: str = "",
+    academic_year: str = "",
+    revision: str = "",
+    order: str = "recent",
+):
+    prepare_api_operation(request, "exit_interviews_queue_list")
+    return exit_interview_queue.queue_page(
+        _actor(request),
+        _page(page, page_size),
+        query=q,
+        statuses=status,
+        academic_year=academic_year,
+        revision=revision,
+        order=order,
+    )
+
+
+@router.get(
+    "/queue/{reference_code}/",
+    response=ExitInterviewQueueDetailSchema,
+    exclude_unset=True,
+    operation_id="exit_interviews_queue_detail",
+)
+def exit_interview_queue_detail(request, reference_code: str):
+    prepare_api_operation(request, "exit_interviews_queue_detail")
+    detail = exit_interview_queue.queue_detail(_actor(request), reference_code)
+    if detail is None:
+        raise NotFoundError()
+    return detail
+
+
+@router.get(
+    "/queue/{reference_code}/sensitive/",
+    response=ExitInterviewQueueDetailSchema,
+    exclude_unset=True,
+    operation_id="exit_interviews_queue_sensitive_detail",
+)
+def exit_interview_queue_sensitive_detail(request, reference_code: str):
+    prepare_api_operation(request, "exit_interviews_queue_sensitive_detail")
+    detail = exit_interview_queue.queue_sensitive_detail(_actor(request), reference_code)
+    if detail is None:
+        raise NotFoundError()
+    return detail
 
 
 @router.post(

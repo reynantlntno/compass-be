@@ -7,6 +7,10 @@ from django.utils import timezone
 
 from apps.account_security.api_tokens import issue_token_pair
 from apps.accounts.models import RoleChoices, User
+from apps.access_control.capabilities import Capability
+from apps.access_control.choices import GrantReasonCode, ScopeMode
+from apps.access_control.models import CounselorCoverage, WorkflowAuthorityGrant
+from apps.common.contracts import PageRequest
 from apps.common.form_values import ValidatedAnswerSet
 from apps.common.exceptions import ValidationError
 from apps.exit_interviews.api import (
@@ -18,8 +22,11 @@ from apps.exit_interviews.api import (
     ExitInterviewStatusSchema,
 )
 from apps.exit_interviews import projections
+from apps.exit_interviews import queue as exit_interview_queue
 from apps.exit_interviews.commands import ExitInterviewDraftCommand
+from apps.exit_interviews.models import ExitInterviewResponse, ExitResponseStatus
 from apps.exit_interviews.policies import can_view_exit_free_text
+from apps.organizations.models import FormFamily, FormRevision, FormRevisionStatusChoices
 from apps.profiles.models import StudentProfile
 
 
@@ -198,6 +205,195 @@ class ExitInterviewApiResponseTests(TestCase):
                 response = self.client.get(path, **headers)
                 self.assertEqual(response.status_code, 200, response.content)
                 schema(**response.json())
+
+
+class ExitInterviewQueueTests(TestCase):
+    def setUp(self):
+        self.student = User.objects.create_user(
+            email="exit-queue-student@example.test",
+            password="correct-horse-battery-staple",
+            first_name="Queue",
+            last_name="Student",
+            role=RoleChoices.STUDENT,
+            is_active=True,
+        )
+        self.profile = StudentProfile.objects.create(
+            user=self.student,
+            student_number="2026-0001",
+            control_number="CONTROL-ONLY-0001",
+            college="CCMS",
+        )
+        self.counselor = User.objects.create_user(
+            email="exit-queue-counselor@example.test",
+            password="correct-horse-battery-staple",
+            role=RoleChoices.COUNSELOR,
+            is_active=True,
+        )
+        CounselorCoverage.objects.create(
+            counselor=self.counselor,
+            college="CCMS",
+            starts_at=timezone.localdate(),
+        )
+        self.family = FormFamily.objects.create(
+            stable_key="exit-interview-queue",
+            display_name="Exit Interview",
+        )
+        self.revision = FormRevision.objects.create(
+            form_family=self.family,
+            official_form_code="EXIT-QUEUE",
+            official_revision="1",
+            internal_schema_version="exit-1",
+            display_title="Exit Interview",
+            status=FormRevisionStatusChoices.ACTIVE,
+        )
+        self.response = ExitInterviewResponse.objects.create(
+            reference_code="EIT-QUEUE-000001",
+            student=self.profile,
+            lifecycle_snapshot="GRADUATING",
+            program_snapshot="BS Computer Science",
+            college_snapshot="CCMS",
+            academic_year="2025-2026",
+            graduation_year_snapshot="2026",
+            eligibility_source="assignment",
+            form_family=self.family,
+            form_revision=self.revision,
+            status=ExitResponseStatus.SUBMITTED,
+            submitted_at=timezone.now(),
+            response_json={"suggestion": "private answer"},
+        )
+
+    def test_queue_filters_scope_and_projection_do_not_include_sensitive_fields(self):
+        page = exit_interview_queue.queue_page(
+            self.counselor,
+            PageRequest(page=1, page_size=20),
+            query="EIT-QUEUE-000001",
+            academic_year="2025-2026",
+            revision="1",
+        )
+        self.assertEqual(page["total"], 1)
+        self.assertEqual(
+            set(page["items"][0]),
+            {
+                "reference_code",
+                "student_display_name",
+                "student_number",
+                "academic_year",
+                "graduation_year_snapshot",
+                "form_code",
+                "form_revision",
+                "form_title",
+                "status",
+                "submitted_at",
+                "counselor_acknowledged_at",
+                "created_at",
+                "updated_at",
+            },
+        )
+        self.assertEqual(
+            exit_interview_queue.queue_page(
+                self.counselor,
+                PageRequest(page=1, page_size=20),
+                query="exit-queue-student@example.test",
+            )["total"],
+            0,
+        )
+        self.assertEqual(
+            exit_interview_queue.queue_page(
+                self.counselor,
+                PageRequest(page=1, page_size=20),
+                query="CONTROL-ONLY-0001",
+            )["total"],
+            0,
+        )
+        detail = exit_interview_queue.queue_detail(
+            self.counselor, self.response.reference_code
+        )
+        self.assertNotIn("answers", detail)
+        self.assertNotIn("id", detail)
+        self.assertIsNotNone(
+            exit_interview_queue.queue_sensitive_detail(
+                self.counselor, self.response.reference_code
+            )["answers"]
+        )
+
+    def test_gco_requires_queue_grant_and_still_cannot_read_sensitive_answers(self):
+        gco = User.objects.create_user(
+            email="exit-queue-gco@example.test",
+            password="correct-horse-battery-staple",
+            role=RoleChoices.GCO_STAFF,
+            is_active=True,
+        )
+        self.assertEqual(
+            exit_interview_queue.queue_page(
+                gco, PageRequest(page=1, page_size=20)
+            )["total"],
+            0,
+        )
+        WorkflowAuthorityGrant.objects.create(
+            grantee=gco,
+            capability=Capability.EXIT_INTERVIEWS_QUEUE_VIEW.value,
+            scope_mode=ScopeMode.EXPLICIT_ORGANIZATION.value,
+            college="CCMS",
+            valid_from=timezone.localdate(),
+            granted_by=self.counselor,
+            grant_reason_code=GrantReasonCode.LOCAL_WORKFLOW,
+        )
+        page = exit_interview_queue.queue_page(
+            gco, PageRequest(page=1, page_size=20)
+        )
+        self.assertEqual(page["total"], 1)
+        self.assertIsNone(
+            exit_interview_queue.queue_sensitive_detail(
+                gco, self.response.reference_code
+            )
+        )
+
+    def test_queue_http_contract_is_typed_safe_and_answer_gated(self):
+        headers = {
+            "HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(self.counselor, assurance_verified=True).access_token}"
+        }
+        page = self.client.get("/api/v1/exit-interviews/queue/", **headers)
+        self.assertEqual(page.status_code, 200, page.content)
+        payload = page.json()
+        self.assertEqual(set(payload), {"items", "page", "page_size", "total"})
+        self.assertEqual(payload["total"], 1)
+        row = payload["items"][0]
+        self.assertEqual(
+            set(row),
+            {
+                "reference_code",
+                "student_display_name",
+                "student_number",
+                "academic_year",
+                "graduation_year_snapshot",
+                "form_code",
+                "form_revision",
+                "form_title",
+                "status",
+                "submitted_at",
+                "counselor_acknowledged_at",
+                "created_at",
+                "updated_at",
+            },
+        )
+        for forbidden in (
+            "answers",
+            "id",
+            "response_id",
+            "student_profile_id",
+            "counselor_id",
+            "email",
+            "control_number",
+        ):
+            self.assertNotIn(forbidden, row)
+
+        detail = self.client.get("/api/v1/exit-interviews/queue/EIT-QUEUE-000001/", **headers)
+        self.assertEqual(detail.status_code, 200)
+        self.assertNotIn("answers", detail.json())
+
+        sensitive = self.client.get("/api/v1/exit-interviews/queue/EIT-QUEUE-000001/sensitive/", **headers)
+        self.assertEqual(sensitive.status_code, 200)
+        self.assertEqual(sensitive.json()["answers"], {"suggestion": "private answer"})
 
 
 class ExitInterviewSensitiveTargetTests(SimpleTestCase):

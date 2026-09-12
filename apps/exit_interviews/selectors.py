@@ -42,7 +42,18 @@ def _staff_scope_q(actor):
     if is_counselor(actor):
         return build_geographic_scope_q(get_live_counselor_coverages(actor), field_map)
     if is_gco_staff(actor):
-        return build_workflow_authority_scope_q(actor, capability=Capability.EXIT_INTERVIEWS_PROCESS, field_map=field_map)
+        return (
+            build_workflow_authority_scope_q(
+                actor,
+                capability=Capability.EXIT_INTERVIEWS_QUEUE_VIEW,
+                field_map=field_map,
+            )
+            | build_workflow_authority_scope_q(
+                actor,
+                capability=Capability.EXIT_INTERVIEWS_PROCESS,
+                field_map=field_map,
+            )
+        )
     return Q(pk__in=[])
 
 
@@ -84,12 +95,21 @@ def get_exit_detail_for_actor_by_reference(actor, reference_code: str) -> ExitIn
 def can_view_exit_review_queue(actor) -> bool:
     if not is_active_nonlegacy_actor(actor):
         return False
+    if has_capability(actor, Capability.EXIT_INTERVIEWS_QUEUE_VIEW):
+        return True
     if has_capability(actor, Capability.EXIT_INTERVIEWS_PROCESS):
         return True
     if is_counselor(actor):
         return get_live_counselor_coverages(actor).exists()
     if is_gco_staff(actor):
-        return get_active_workflow_authority_grants(actor, capability=Capability.EXIT_INTERVIEWS_PROCESS).exists()
+        return (
+            get_active_workflow_authority_grants(
+                actor, capability=Capability.EXIT_INTERVIEWS_QUEUE_VIEW
+            ).exists()
+            or get_active_workflow_authority_grants(
+                actor, capability=Capability.EXIT_INTERVIEWS_PROCESS
+            ).exists()
+        )
     return False
 
 

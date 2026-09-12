@@ -44,6 +44,8 @@ class Capability(str, Enum):
     AUDIT_VIEW = "audit.view"
 
     COUNSELING_SESSIONS_QUEUE_VIEW = "counseling.sessions.queue.view"
+    INVENTORY_QUEUE_VIEW = "inventory.queue.view"
+    EXIT_INTERVIEWS_QUEUE_VIEW = "exit_interviews.queue.view"
     COUNSELING_SESSION_METADATA_VIEW_INSTITUTION = "counseling_sessions.metadata.view_institution"
     COUNSELING_SESSION_ASSIGN = "counseling_sessions.assign"
     COUNSELING_SESSION_LOCK = "counseling_sessions.lock"
@@ -212,6 +214,15 @@ def _declare(capabilities, *, sources, grant_roles=(), grant_scopes=(), expiry=F
 _declare(
     (Capability.STUDENT_RECORDS_VIEW_SCOPED, Capability.COUNSELING_SESSIONS_QUEUE_VIEW),
     sources={AuthoritySource.COUNSELOR_BASELINE}, bundle="students",
+)
+_declare(
+    (Capability.INVENTORY_QUEUE_VIEW,),
+    sources={AuthoritySource.COUNSELOR_BASELINE}, bundle="forms",
+)
+_declare(
+    (Capability.EXIT_INTERVIEWS_QUEUE_VIEW,),
+    sources={AuthoritySource.COUNSELOR_BASELINE, AuthoritySource.ACCOUNT_GRANT},
+    grant_roles={ROLE_GCO_STAFF}, grant_scopes=_GCO_SCOPE, bundle="forms",
 )
 _declare(
     (Capability.APPOINTMENTS_QUEUE_VIEW,),
