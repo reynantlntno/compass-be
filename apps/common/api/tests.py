@@ -376,6 +376,7 @@ class ApiOperationRegistryTests(SimpleTestCase):
             "appointments_availability_deactivate", "appointments_office_closure_create",
             "appointments_office_closure_update", "appointments_office_closure_deactivate",
             "counseling_sessions_list", "counseling_session_detail", "counseling_session_workspace",
+            "counseling_session_related_records", "counseling_session_urgent_support_options",
             "counseling_note_detail",
             "counseling_session_summary", "counseling_routine_interviews_list",
             "counseling_routine_interview_detail", "counseling_routine_interview_sensitive_detail",
@@ -397,7 +398,8 @@ class ApiOperationRegistryTests(SimpleTestCase):
             "counseling_case_resolve", "counseling_case_hold", "counseling_case_resume",
             "counseling_case_close", "counseling_case_reopen",
             "counseling_case_collaborator_add", "counseling_case_collaborator_remove",
-            "counseling_case_link_session",
+            "counseling_case_link_session", "counseling_urgent_link_options",
+            "counseling_urgent_link_session", "counseling_urgent_link_case",
             "counseling_urgent_create", "counseling_urgent_triage",
             "counseling_urgent_review", "counseling_urgent_close",
             "counseling_urgent_access_grant", "counseling_urgent_access_revoke",
@@ -955,6 +957,10 @@ class ApiResponseDocumentationTests(SimpleTestCase):
             "content_public_announcements": ("/api/v1/content/announcements/", "get"),
             "content_public_resources": ("/api/v1/content/resources/", "get"),
             "counseling_sessions_list": ("/api/v1/counseling/sessions/", "get"),
+            "counseling_session_urgent_support_options": (
+                "/api/v1/counseling/sessions/{reference_code}/urgent-support-options/",
+                "get",
+            ),
             "counseling_routine_interviews_list": ("/api/v1/counseling/routine-interviews/", "get"),
             "counseling_cases_list": ("/api/v1/counseling/cases/", "get"),
             "counseling_urgent_list": ("/api/v1/counseling/urgent-support/", "get"),
@@ -1046,7 +1052,7 @@ class ApiResponseDocumentationTests(SimpleTestCase):
                 >= {"page", "page_size"}
             )
 
-        self.assertEqual(len(expected_paths), 88)
+        self.assertEqual(len(expected_paths), 89)
         self.assertEqual(
             {
                 operation_id
@@ -1910,13 +1916,15 @@ class CounselingResponseDocumentationTests(SimpleTestCase):
             if operation_id.startswith("counseling_")
         }
         json_ids = counseling_ids - binary_ids
-        self.assertEqual(len(counseling_ids), 70)
-        self.assertEqual(len(json_ids), 66)
+        self.assertEqual(len(counseling_ids), 75)
+        self.assertEqual(len(json_ids), 71)
 
         explicit = {
             "counseling_sessions_list": "CounselingSessionPageSchema",
             "counseling_session_detail": "CounselingSessionProjectionSchema",
             "counseling_session_workspace": "CounselingSessionWorkspaceContextSchema",
+            "counseling_session_related_records": "CounselingRelatedRecordsSchema",
+            "counseling_session_urgent_support_options": "CounselingLinkOptionPageSchema",
             "counseling_note_detail": "CounselingNoteProjectionSchema",
             "counseling_session_summary": "CounselingStudentSummarySchema",
             "counseling_routine_interviews_list": "RoutineInterviewPageSchema",
@@ -1928,6 +1936,7 @@ class CounselingResponseDocumentationTests(SimpleTestCase):
             "counseling_urgent_list": "UrgentSupportPageSchema",
             "counseling_urgent_counselor_options": "UrgentSupportCounselorOptionPageSchema",
             "counseling_urgent_detail": "UrgentSupportProjectionSchema",
+            "counseling_urgent_link_options": "CounselingUrgentLinkOptionsSchema",
             "counseling_ecounseling_recording_availability": "RecordingAvailabilitySchema",
             "counseling_ecounseling_recording_status": "RecordingStatusSchema",
             "counseling_ecounseling_recording_start": "RecordingMutationResponseSchema",
@@ -1940,7 +1949,7 @@ class CounselingResponseDocumentationTests(SimpleTestCase):
             "counseling_ecounseling_join": "ECounselingJoinContextSchema",
         }
         mutation_ids = json_ids - set(explicit)
-        self.assertEqual(len(mutation_ids), 42)
+        self.assertEqual(len(mutation_ids), 44)
         expected = {
             **explicit,
             **{operation_id: "CounselingMutationResponseSchema" for operation_id in mutation_ids},

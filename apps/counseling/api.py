@@ -396,6 +396,34 @@ class UrgentSupportPageSchema(PageResultSchema):
     items: list[UrgentSupportQueueProjectionSchema]
 
 
+class CounselingRelatedRecordSchema(Schema):
+    """One safe, policy-filtered relationship in the session context."""
+
+    record_type: str
+    reference_code: str
+    status: str | None = None
+    created_at: datetime_type | None = None
+    updated_at: datetime_type | None = None
+
+
+class CounselingRelatedRecordsSchema(Schema):
+    items: list[CounselingRelatedRecordSchema]
+
+
+class CounselingLinkOptionSchema(Schema):
+    reference_code: str
+    status: str | None = None
+
+
+class CounselingLinkOptionPageSchema(PageResultSchema):
+    items: list[CounselingLinkOptionSchema]
+
+
+class CounselingUrgentLinkOptionsSchema(Schema):
+    sessions: list[CounselingLinkOptionSchema]
+    cases: list[CounselingLinkOptionSchema]
+
+
 class CounselingMutationResponseSchema(Schema):
     """Bounded superset for counseling mutation and idempotent replay outputs."""
 
@@ -635,6 +663,14 @@ class UrgentSupportRevokeSchema(Schema):
     grant_id: int | None = None
     grant_selection_token: str | None = None
     reason_code: str = ""
+
+
+class UrgentSupportLinkSchema(Schema):
+    target_reference_code: str
+    # Session links must declare their operational meaning.  Case links leave
+    # this unset; both values are kept as public workflow vocabulary rather
+    # than exposing the service's internal boolean command field.
+    intent: str | None = None
 
 
 class UrgentSupportReviewSchema(Schema):
@@ -957,6 +993,43 @@ def session_workspace_context(request, reference_code: str):
     if payload is None:
         raise NotFoundError()
     return payload
+
+
+@router.get(
+    "/sessions/{reference_code}/related-records/",
+    response=CounselingRelatedRecordsSchema,
+    exclude_unset=True,
+    operation_id="counseling_session_related_records",
+)
+def session_related_records(request, reference_code: str):
+    from apps.counseling.integrations import project_related_records
+
+    prepare_api_operation(request, "counseling_session_related_records")
+    actor = _actor(request)
+    return {"items": project_related_records(actor, get_session_or_404(actor, reference_code))}
+
+
+@router.get(
+    "/sessions/{reference_code}/urgent-support-options/",
+    response=CounselingLinkOptionPageSchema,
+    exclude_unset=True,
+    operation_id="counseling_session_urgent_support_options",
+)
+def session_urgent_support_options(
+    request,
+    reference_code: str,
+    page: PageQuery,
+    page_size: PageSizeQuery,
+):
+    from apps.counseling.integrations import get_session_urgent_support_options
+
+    prepare_api_operation(request, "counseling_session_urgent_support_options")
+    actor = _actor(request)
+    return get_session_urgent_support_options(
+        actor,
+        get_session_or_404(actor, reference_code),
+        _page(page, page_size),
+    ).as_dict()
 
 
 @router.get(
@@ -1900,6 +1973,70 @@ def urgent_counselor_options(
         q=q,
         page=_page(page, page_size),
     ).as_dict()
+
+
+@router.get(
+    "/urgent-support/{reference_code}/link-options/",
+    response=CounselingUrgentLinkOptionsSchema,
+    exclude_unset=True,
+    operation_id="counseling_urgent_link_options",
+)
+def urgent_link_options(request, reference_code: str):
+    from apps.counseling.integrations import get_urgent_link_options
+    from apps.counseling.selectors import get_urgent_support_request_by_reference_code
+
+    prepare_api_operation(request, "counseling_urgent_link_options")
+    actor = _actor(request)
+    urgent_support = get_urgent_support_request_by_reference_code(actor, reference_code)
+    if urgent_support is None:
+        raise NotFoundError()
+    return get_urgent_link_options(actor, urgent_support)
+
+
+@router.post(
+    "/urgent-support/{reference_code}/link-session/",
+    response=CounselingMutationResponseSchema,
+    exclude_unset=True,
+    operation_id="counseling_urgent_link_session",
+)
+def link_urgent_session_route(request, reference_code: str, payload: UrgentSupportLinkSchema):
+    from apps.counseling.services import link_urgent_support_to_session
+
+    actor = _actor(request)
+    data = _payload(payload)
+    intent = str(data.pop("intent", "") or "").strip().lower()
+    if intent not in {"originating", "documentation"}:
+        raise ValidationError(field_errors={"intent": ["Choose originating or documentation."]})
+    command = UrgentLinkCommand(
+        target_reference_code=data["target_reference_code"],
+        documentation=intent == "documentation",
+    )
+    return _run(
+        request,
+        "counseling_urgent_link_session",
+        _fingerprint_payload(reference_code=reference_code, command=command),
+        lambda: _urgent_outcome(link_urgent_support_to_session(actor, reference_code, command)),
+    )
+
+
+@router.post(
+    "/urgent-support/{reference_code}/link-case/",
+    response=CounselingMutationResponseSchema,
+    exclude_unset=True,
+    operation_id="counseling_urgent_link_case",
+)
+def link_urgent_case_route(request, reference_code: str, payload: UrgentSupportLinkSchema):
+    from apps.counseling.services import link_urgent_support_to_case
+
+    actor = _actor(request)
+    data = _payload(payload)
+    command = UrgentLinkCommand(target_reference_code=data["target_reference_code"])
+    return _run(
+        request,
+        "counseling_urgent_link_case",
+        _fingerprint_payload(reference_code=reference_code, command=command),
+        lambda: _urgent_outcome(link_urgent_support_to_case(actor, reference_code, command)),
+    )
 
 
 @router.post(
