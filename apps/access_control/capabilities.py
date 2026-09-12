@@ -46,6 +46,8 @@ class Capability(str, Enum):
     COUNSELING_SESSIONS_QUEUE_VIEW = "counseling.sessions.queue.view"
     INVENTORY_QUEUE_VIEW = "inventory.queue.view"
     EXIT_INTERVIEWS_QUEUE_VIEW = "exit_interviews.queue.view"
+    REFERRALS_QUEUE_VIEW = "referrals.queue.view"
+    CALL_SLIPS_QUEUE_VIEW = "call_slips.queue.view"
     COUNSELING_SESSION_METADATA_VIEW_INSTITUTION = "counseling_sessions.metadata.view_institution"
     COUNSELING_SESSION_ASSIGN = "counseling_sessions.assign"
     COUNSELING_SESSION_LOCK = "counseling_sessions.lock"
@@ -223,6 +225,16 @@ _declare(
     (Capability.EXIT_INTERVIEWS_QUEUE_VIEW,),
     sources={AuthoritySource.COUNSELOR_BASELINE, AuthoritySource.ACCOUNT_GRANT},
     grant_roles={ROLE_GCO_STAFF}, grant_scopes=_GCO_SCOPE, bundle="forms",
+)
+_declare(
+    (Capability.REFERRALS_QUEUE_VIEW,),
+    sources={AuthoritySource.COUNSELOR_BASELINE, AuthoritySource.ACCOUNT_GRANT},
+    grant_roles={ROLE_GCO_STAFF}, grant_scopes=_GCO_SCOPE, bundle="referrals",
+)
+_declare(
+    (Capability.CALL_SLIPS_QUEUE_VIEW,),
+    sources={AuthoritySource.COUNSELOR_BASELINE, AuthoritySource.ACCOUNT_GRANT},
+    grant_roles={ROLE_GCO_STAFF}, grant_scopes=_GCO_SCOPE, bundle="call_slips",
 )
 _declare(
     (Capability.APPOINTMENTS_QUEUE_VIEW,),

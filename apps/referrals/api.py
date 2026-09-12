@@ -12,6 +12,7 @@ from apps.common.api.schemas import PageResultSchema
 from apps.common.contracts import ContractValidationError, to_json_object
 from apps.common.exceptions import NotFoundError, ValidationError
 from apps.referrals import queries
+from apps.referrals import queue as referrals_queue
 from apps.referrals.commands import (
     ReferralActionCommand,
     ReferralAssignmentCommand,
@@ -64,6 +65,49 @@ class ReferralQueueItemSchema(Schema):
 
 class ReferralPageResultSchema(PageResultSchema):
     items: list[ReferralQueueItemSchema]
+
+
+class ReferralStaffQueueItemSchema(Schema):
+    """Staff queue projection for the Referrals workspace.
+
+    Row scope and sensitive-field access remain owned by the existing Referral
+    selectors and policies; this schema is an explicit allowlist only.
+    """
+
+    reference_code: str
+    student_display_name: str
+    student_number: str | None = None
+    student_block_snapshot: str | None = None
+    source_type: str
+    source_type_label: str
+    reason_category: str
+    reason_category_label: str
+    status: str
+    status_label: str
+    assignment_state: str
+    age_bucket: str
+    received_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+    has_active_call_slip: bool
+    active_call_slip_reference: str | None = None
+    can_prepare_call_slip: bool
+    is_terminal: bool
+
+
+class ReferralStaffQueuePageResultSchema(PageResultSchema):
+    items: list[ReferralStaffQueueItemSchema]
+
+
+class ReferralCounselorOptionSchema(Schema):
+    """Staff assign target represented by a short-lived opaque selector."""
+
+    selection_token: str
+    display_name: str
+
+
+class ReferralCounselorOptionPageSchema(PageResultSchema):
+    items: list[ReferralCounselorOptionSchema]
 
 
 class ReferralActionOutputSchema(Schema):
@@ -145,7 +189,8 @@ class ReferralMutationResponseSchema(Schema):
 
 
 class ReferralDraftSchema(Schema):
-    student_id: int
+    student_id: int | None = None
+    student_selection_token: str | None = None
     source_type: str
     reason_category_code: str = "UNCATEGORIZED"
     reason_text: str = ""
@@ -181,7 +226,8 @@ class ReferralActionSchema(Schema):
 
 
 class ReferralAssignmentSchema(Schema):
-    counselor_id: int
+    counselor_id: int | None = None
+    counselor_selection_token: str | None = None
     reason_code: str
 
 
@@ -245,6 +291,44 @@ def _data(payload):
     return payload.dict(exclude_unset=True) if payload is not None else {}
 
 
+def _resolve_student_id(actor, data: dict) -> int:
+    legacy_id = data.pop("student_id", None)
+    selection_token = data.pop("student_selection_token", None)
+    if legacy_id is not None and selection_token:
+        raise ValidationError()
+    if selection_token:
+        from apps.access_control.student_selectors import resolve_student_selection_token
+
+        profile = resolve_student_selection_token(actor, "referral", selection_token)
+        if profile is None:
+            raise ValidationError()
+        return profile.user_id
+    if isinstance(legacy_id, bool) or not isinstance(legacy_id, int) or legacy_id <= 0:
+        raise ValidationError()
+    return legacy_id
+
+
+def _resolve_counselor_assignment(actor, reference_code: str, data: dict) -> dict:
+    legacy_id = data.pop("counselor_id", None)
+    selection_token = data.pop("counselor_selection_token", None)
+    if legacy_id is not None and selection_token:
+        raise ValidationError()
+    if selection_token:
+        from apps.access_control.selection_tokens import resolve_counselor_selection_token
+
+        counselor = resolve_counselor_selection_token(
+            actor, "referral", reference_code, selection_token,
+        )
+        if counselor is None:
+            raise ValidationError()
+        data["counselor_id"] = counselor.pk
+    elif legacy_id is not None:
+        data["counselor_id"] = legacy_id
+    else:
+        raise ValidationError()
+    return data
+
+
 def _command_fingerprint(command, **extra):
     if not is_dataclass(command):
         raise ValidationError()
@@ -290,6 +374,57 @@ def _run(request, operation_id, payload, operation):
 def list_referrals(request, page: PageQuery, page_size: PageSizeQuery):
     prepare_api_operation(request, "referrals_list")
     return queries.scoped_referral_page(_actor(request), _page(page, page_size)).as_dict()
+
+
+@router.get("/queue/", response=ReferralStaffQueuePageResultSchema, operation_id="referrals_queue_list")
+def list_referral_queue(
+    request,
+    page: PageQuery,
+    page_size: PageSizeQuery,
+    q: str = "",
+    status: str = "",
+    academic_year: str = "",
+    assignment: str = "all",
+    source_type: str = "",
+    reason_category: str = "",
+    order: str = "recent",
+):
+    """Staff-facing Referrals queue with bounded filters and an allowlist row."""
+    prepare_api_operation(request, "referrals_queue_list")
+    return referrals_queue.queue_page(
+        _actor(request),
+        _page(page, page_size),
+        query=q,
+        statuses=status,
+        academic_year=academic_year,
+        assignment=assignment,
+        source_types=source_type,
+        reason_categories=reason_category,
+        order=order,
+    )
+
+
+@router.get(
+    "/{reference_code}/counselor-options/",
+    response=ReferralCounselorOptionPageSchema,
+    operation_id="referrals_counselor_options",
+)
+def referral_counselor_options(
+    request,
+    reference_code: str,
+    page: PageQuery,
+    page_size: PageSizeQuery,
+    q: str = "",
+):
+    prepare_api_operation(request, "referrals_counselor_options")
+    from apps.referrals.selectors import get_referral_counselor_options, get_referral_by_reference_code
+
+    referral = get_referral_by_reference_code(_actor(request), reference_code)
+    if referral is None:
+        raise NotFoundError()
+    return get_referral_counselor_options(
+        _actor(request), referral, q=q, page=_page(page, page_size),
+    ).as_dict()
 
 
 @router.get(
@@ -365,6 +500,7 @@ def reassignment_detail(request, request_id: int):
 @router.post("/", response=ReferralMutationResponseSchema, operation_id="referrals_create")
 def create(request, payload: ReferralDraftSchema):
     data = _data(payload)
+    student_id = _resolve_student_id(_actor(request), data)
     command = ReferralDraftCommand(
         source_type=data["source_type"],
         reason_category_code=data.get("reason_category_code", "UNCATEGORIZED"),
@@ -381,9 +517,9 @@ def create(request, payload: ReferralDraftSchema):
     return run_api_mutation(
         request,
         "referrals_create",
-        _command_fingerprint(command, student_id=data["student_id"]),
+        _command_fingerprint(command, student_id=student_id),
         lambda: _outcome(create_referral_draft(
-            _actor(request), data["student_id"], command, prepared.idempotency_key,
+            _actor(request), student_id, command, prepared.idempotency_key,
         )),
         _replay,
         prepared_operation=prepared,
@@ -444,13 +580,15 @@ def request_reassignment(request, reference_code: str, payload: ReferralReassign
 
 @router.post("/{reference_code}/assign/", response=ReferralMutationResponseSchema, operation_id="referrals_assign")
 def assign(request, reference_code: str, payload: ReferralAssignmentSchema):
-    command = ReferralAssignmentCommand(**_data(payload))
+    data = _resolve_counselor_assignment(_actor(request), reference_code, _data(payload))
+    command = ReferralAssignmentCommand(**data)
     return _run(request, "referrals_assign", _command_fingerprint(command, reference_code=reference_code), lambda: _outcome(assign_referral_counselor(_actor(request), reference_code, command)))
 
 
 @router.post("/{reference_code}/reassign/", response=ReferralMutationResponseSchema, operation_id="referrals_reassign")
 def reassign(request, reference_code: str, payload: ReferralAssignmentSchema):
-    command = ReferralAssignmentCommand(**_data(payload))
+    data = _resolve_counselor_assignment(_actor(request), reference_code, _data(payload))
+    command = ReferralAssignmentCommand(**data)
     return _run(request, "referrals_reassign", _command_fingerprint(command, reference_code=reference_code), lambda: _outcome(reassign_referral_counselor(_actor(request), reference_code, command)))
 
 

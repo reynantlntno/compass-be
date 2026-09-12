@@ -15,7 +15,11 @@ from apps.access_control.display import office_student_display_label
 from apps.access_control.authority import has_capability
 from apps.access_control.rules import is_active_nonlegacy_actor, is_counselor, is_gco_staff
 from apps.access_control.capabilities import Capability
-from apps.access_control.scopes import build_workflow_authority_scope_q
+from apps.access_control.scopes import (
+    build_geographic_scope_q,
+    build_workflow_authority_scope_q,
+    get_live_counselor_coverages,
+)
 from apps.access_control.selectors import get_students_visible_to
 from apps.profiles.models import StudentProfile
 from apps.accounts.models import RoleChoices
@@ -59,6 +63,27 @@ def workflow_allowed(actor, workflow: str) -> bool:
 def visible_students_for_workflow(actor, workflow: str):
     if not workflow_allowed(actor, workflow):
         return StudentProfile.objects.none()
+    if workflow == "counseling_session":
+        # Session creation is narrower than institution-wide student viewing:
+        # the service policy requires the counselor's current live coverage
+        # for a walk-in student.  Keep this selector aligned with that rule so
+        # an issued option can never advertise a student the create service
+        # would reject.  Head Guidance remains a counselor designation and
+        # does not receive an automatic coverage bypass here.
+        coverage_q = build_geographic_scope_q(
+            get_live_counselor_coverages(actor),
+            {
+                "campus": "campus",
+                "college": "college",
+                "department": "department",
+                "program": "program",
+            },
+        )
+        return StudentProfile.objects.filter(
+            coverage_q,
+            user__is_active=True,
+            user__role=RoleChoices.STUDENT,
+        ).select_related("user")
     # Counselor-facing workflows share current counselor coverage.  The
     # referral/call-slip staff path is intentionally separate: staff receive
     # only their explicitly assigned workflow scope, never counselor coverage.

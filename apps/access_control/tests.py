@@ -31,6 +31,7 @@ from apps.access_control.choices import GrantReasonCode, GrantStatus, ScopeMode
 from apps.access_control.models import CounselorCoverage, WorkflowAuthorityGrant
 from apps.access_control.scopes import counselor_has_live_coverage_for_student
 from apps.access_control.rules import owns_student_profile, owns_user
+from apps.access_control.student_selectors import visible_students_for_workflow
 from apps.common.exceptions import NotFoundError
 from apps.profiles.queries import support_directory_page
 from apps.profiles.models import CounselorProfile, GCOStaffProfile, StudentProfile
@@ -261,6 +262,40 @@ class CoveragePrimitiveTests(TestCase):
             counselor=counselor, college="CCMS", starts_at=today - timedelta(days=10), ends_at=today - timedelta(days=1),
         )
         self.assertFalse(counselor_has_live_coverage_for_student(counselor, student))
+
+    def test_counseling_session_student_options_follow_live_coverage(self):
+        today = timezone.localdate()
+        counselor = user("walk-in-counselor@example.test", RoleChoices.COUNSELOR)
+        covered = StudentProfile.objects.create(
+            user=user("walk-in-covered@example.test", RoleChoices.STUDENT),
+            college="CCMS",
+        )
+        outside = StudentProfile.objects.create(
+            user=user("walk-in-outside@example.test", RoleChoices.STUDENT),
+            college="CBA",
+        )
+        CounselorCoverage.objects.create(
+            counselor=counselor,
+            college="CCMS",
+            starts_at=today,
+        )
+
+        options = visible_students_for_workflow(counselor, "counseling_session")
+
+        self.assertTrue(options.filter(pk=covered.pk).exists())
+        self.assertFalse(options.filter(pk=outside.pk).exists())
+        self.assertFalse(
+            visible_students_for_workflow(
+                user("walk-in-gco@example.test", RoleChoices.GCO_STAFF),
+                "counseling_session",
+            ).exists()
+        )
+        self.assertFalse(
+            visible_students_for_workflow(
+                user("walk-in-admin@example.test", RoleChoices.IT_ADMIN),
+                "counseling_session",
+            ).exists()
+        )
 
 
 class OwnerAndDirectoryBoundaryTests(TestCase):

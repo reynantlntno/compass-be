@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from django.test import SimpleTestCase
 
-from apps.common.exceptions import NotFoundError
+from apps.common.exceptions import NotFoundError, ValidationError
 from apps.counseling.api import (
     AccessGrantSchema,
     CounselingCaseProjectionSchema,
@@ -25,6 +25,7 @@ from apps.counseling.api import (
     RoutineInterviewQueueProjectionSchema,
     RoutineInterviewProjectionSchema,
     RoutineInterviewSensitiveDetailSchema,
+    SessionCreateSchema,
     TranscriptMetadataSchema,
     TranscriptionStatusSchema,
     UrgentSupportCounselorOptionPageSchema,
@@ -37,6 +38,7 @@ from apps.counseling.api import (
     save_evaluation_route,
     save_intake_route,
     routine_interview_sensitive_detail,
+    create_session_route,
 )
 
 
@@ -123,6 +125,105 @@ class CounselingApiMutationWiringTests(SimpleTestCase):
 
         service.assert_called_once()
         self.assertEqual(result.value, {"requested": True})
+
+
+class CounselingApiWalkInCreationTests(SimpleTestCase):
+    """Walk-in creation resolves a scoped opaque student choice at the API edge."""
+
+    def _payload(self, **overrides):
+        values = {
+            "session_type": "COUNSELING",
+            "session_mode": "ONSITE",
+            "session_source": "WALK_IN",
+        }
+        values.update(overrides)
+        return SessionCreateSchema(**values)
+
+    @patch("apps.counseling.api._run", side_effect=_execute_operation)
+    @patch("apps.counseling.services.create_session")
+    @patch("apps.access_control.student_selectors.resolve_student_selection_token")
+    def test_selection_token_resolves_to_internal_student_for_existing_service(
+        self,
+        resolve_token,
+        service,
+        _run,
+    ):
+        actor = SimpleNamespace(pk=11)
+        request = SimpleNamespace(auth=SimpleNamespace(user=actor))
+        resolve_token.return_value = SimpleNamespace(user_id=42)
+        service.return_value = SimpleNamespace(
+            reference_code="SES-AY2627-000001",
+            status="SCHEDULED",
+        )
+
+        result = create_session_route(
+            request,
+            self._payload(student_selection_token="opaque-selection-token"),
+        )
+
+        resolve_token.assert_called_once_with(
+            actor,
+            "counseling_session",
+            "opaque-selection-token",
+        )
+        service.assert_called_once()
+        command = service.call_args.args[1]
+        self.assertEqual(command.student_id, "42")
+        self.assertEqual(command.session_source, "WALK_IN")
+        self.assertEqual(result.value, {
+            "reference_code": "SES-AY2627-000001",
+            "status": "SCHEDULED",
+        })
+
+    @patch("apps.counseling.api._run")
+    @patch("apps.counseling.services.create_session")
+    def test_requires_exactly_one_student_selection_method(self, service, run):
+        with self.assertRaises(ValidationError):
+            create_session_route(SimpleNamespace(auth=SimpleNamespace(user=object())), self._payload())
+
+        with self.assertRaises(ValidationError):
+            create_session_route(
+                SimpleNamespace(auth=SimpleNamespace(user=object())),
+                self._payload(student_id=17, student_selection_token="opaque"),
+            )
+
+        service.assert_not_called()
+        run.assert_not_called()
+
+    @patch("apps.counseling.api._run")
+    @patch("apps.counseling.services.create_session")
+    @patch("apps.access_control.student_selectors.resolve_student_selection_token", return_value=None)
+    def test_invalid_selection_token_fails_before_session_service(
+        self,
+        resolve_token,
+        service,
+        run,
+    ):
+        with self.assertRaises(ValidationError):
+            create_session_route(
+                SimpleNamespace(auth=SimpleNamespace(user=object())),
+                self._payload(student_selection_token="expired-or-invalid"),
+            )
+
+        resolve_token.assert_called_once()
+        service.assert_not_called()
+        run.assert_not_called()
+
+    @patch("apps.counseling.api._run", side_effect=_execute_operation)
+    @patch("apps.counseling.services.create_session")
+    def test_legacy_numeric_student_id_remains_accepted(self, service, _run):
+        service.return_value = SimpleNamespace(
+            reference_code="SES-AY2627-000002",
+            status="SCHEDULED",
+        )
+
+        create_session_route(
+            SimpleNamespace(auth=SimpleNamespace(user=object())),
+            self._payload(student_id=17),
+        )
+
+        service.assert_called_once()
+        self.assertEqual(service.call_args.args[1].student_id, "17")
 
 
 class CounselingApiRoutineInterviewReadTests(SimpleTestCase):

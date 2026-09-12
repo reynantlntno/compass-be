@@ -139,6 +139,7 @@ API_OPERATION_SPECS = {
     # nor rate limited, and the no-store cache policy is the default.
     "profiles_me": ApiOperationSpec("profiles_me"),
     "profiles_support_directory": ApiOperationSpec("profiles_support_directory"),
+    "profiles_staff_students": ApiOperationSpec("profiles_staff_students"),
 }
 
 
@@ -476,11 +477,15 @@ def _register_referrals_call_slips_operations() -> None:
         "referrals_list",
         "referrals_detail",
         "referrals_reassignment_detail",
+        "referrals_queue_list",
+        "referrals_counselor_options",
         "call_slips_list",
         "call_slips_detail",
         "call_slips_student_detail",
         "call_slips_printable",
         "call_slips_reschedule_detail",
+        "call_slips_queue_list",
+        "call_slips_counselor_options",
     ):
         API_OPERATION_SPECS[operation_id] = ApiOperationSpec(operation_id)
 

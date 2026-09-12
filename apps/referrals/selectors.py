@@ -261,3 +261,59 @@ def get_reassignment_request_for_decision(user, request_id):
     except ReferralReassignmentRequest.DoesNotExist:
         return None
     return request if can_decide_referral_reassignment(user, request) else None
+def get_referral_counselor_options(actor, referral, *, q=None, page=None):
+    """Return scoped active counselor options for a Referral assign action.
+
+    Only counselors who are current, policy-eligible assign targets for this
+    Referral are disclosed. The returned selector is opaque and bound to the
+    requesting actor and this Referral.
+    """
+    from apps.access_control.display import safe_user_display_label
+    from apps.access_control.selection_tokens import issue_counselor_selection_token
+    from apps.accounts.models import RoleChoices, User
+    from apps.common.contracts import PageRequest, PageResult, page_queryset
+    from apps.referrals.policies import (
+        can_assign_referral,
+        can_reassign_referral,
+        can_view_referral_safe_metadata,
+    )
+
+    empty = PageResult((), page.page if page else 1, page.page_size if page else 25, 0)
+    if not can_view_referral_safe_metadata(actor, referral):
+        return empty
+    if not (can_assign_referral(actor, referral) or can_reassign_referral(actor, referral)):
+        return empty
+
+    queryset = User.objects.filter(
+        is_active=True,
+        is_superuser=False,
+        role=RoleChoices.COUNSELOR,
+    ).order_by("last_name", "first_name", "pk")
+    search = " ".join(str(q or "").split())[:80]
+    if search:
+        queryset = queryset.filter(
+            Q(first_name__icontains=search) | Q(last_name__icontains=search)
+        )
+    allowed_ids = [
+        counselor.pk
+        for counselor in queryset
+        if can_assign_referral(actor, referral, counselor)
+        or can_reassign_referral(actor, referral, counselor)
+    ]
+    request = page or PageRequest()
+    paged = page_queryset(
+        queryset.filter(pk__in=allowed_ids),
+        request,
+        lambda counselor: {
+            "selection_token": issue_counselor_selection_token(
+                actor, "referral", referral.reference_code, counselor,
+            ),
+            "display_name": safe_user_display_label(counselor),
+        },
+    )
+    return PageResult(
+        items=tuple(item for item in paged["items"] if item is not None),
+        page=paged["page"],
+        page_size=paged["page_size"],
+        total=paged["total"],
+    )

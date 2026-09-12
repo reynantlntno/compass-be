@@ -354,7 +354,7 @@ class ApiOperationRegistryTests(SimpleTestCase):
             "content_service_guide_schedule", "content_service_guide_submit_review",
             "content_service_guide_update", "content_visible_announcements",
             "content_visible_resources", "content_workspace", "content_workspace_detail",
-            "profiles_me", "profiles_support_directory",
+            "profiles_me", "profiles_support_directory", "profiles_staff_students",
             "inventory_list", "inventory_detail", "inventory_history",
             "inventory_queue_list", "inventory_queue_detail", "inventory_queue_sensitive_detail",
             "inventory_draft_create", "inventory_draft_save", "inventory_draft_save_patch",
@@ -412,6 +412,7 @@ class ApiOperationRegistryTests(SimpleTestCase):
             "counseling_ecounseling_recording_download",
             "counseling_ecounseling_provider_webhook",
             "referrals_list", "referrals_detail", "referrals_reassignment_detail",
+            "referrals_queue_list", "referrals_counselor_options",
             "referrals_create", "referrals_submit", "referrals_receive", "referrals_review",
             "referrals_action", "referrals_action_required", "referrals_reassignment_request",
             "referrals_assign", "referrals_reassign", "referrals_reassignment_decision",
@@ -423,6 +424,7 @@ class ApiOperationRegistryTests(SimpleTestCase):
             "call_slips_reschedule_request", "call_slips_reschedule_decision",
             "call_slips_attendance", "call_slips_no_show", "call_slips_expire",
             "call_slips_cancel",
+            "call_slips_queue_list", "call_slips_counselor_options",
             "good_moral_list", "good_moral_detail", "good_moral_document_detail",
             "good_moral_document_download", "good_moral_create", "good_moral_draft_update",
             "good_moral_submit", "good_moral_cancel", "good_moral_receipt_encode",
@@ -939,6 +941,11 @@ class ApiResponseDocumentationTests(SimpleTestCase):
             "backups_artifacts_list": ("/api/v1/backups/jobs/{job_id}/artifacts/", "get"),
             "backups_restores_list": ("/api/v1/backups/restores/", "get"),
             "call_slips_list": ("/api/v1/call-slips/", "get"),
+            "call_slips_queue_list": ("/api/v1/call-slips/queue/", "get"),
+            "call_slips_counselor_options": (
+                "/api/v1/call-slips/{reference_code}/counselor-options/",
+                "get",
+            ),
             "content_visible_announcements": ("/api/v1/content/feed/announcements/", "get"),
             "content_visible_resources": ("/api/v1/content/feed/resources/", "get"),
             "content_workspace": ("/api/v1/content/workspace/", "get"),
@@ -993,7 +1000,13 @@ class ApiResponseDocumentationTests(SimpleTestCase):
             "privacy_legal_holds_list": ("/api/v1/privacy/legal-holds/", "get"),
             "privacy_incidents_list": ("/api/v1/privacy/incidents/", "get"),
             "profiles_support_directory": ("/api/v1/profiles/directory/", "get"),
+            "profiles_staff_students": ("/api/v1/profiles/staff-students/", "get"),
             "referrals_list": ("/api/v1/referrals/", "get"),
+            "referrals_queue_list": ("/api/v1/referrals/queue/", "get"),
+            "referrals_counselor_options": (
+                "/api/v1/referrals/{reference_code}/counselor-options/",
+                "get",
+            ),
             "reports_definitions": ("/api/v1/reports/definitions/", "get"),
             "reports_runs": ("/api/v1/reports/runs/", "get"),
             "reports_exports": ("/api/v1/reports/exports/", "get"),
@@ -1033,7 +1046,7 @@ class ApiResponseDocumentationTests(SimpleTestCase):
                 >= {"page", "page_size"}
             )
 
-        self.assertEqual(len(expected_paths), 83)
+        self.assertEqual(len(expected_paths), 88)
         self.assertEqual(
             {
                 operation_id

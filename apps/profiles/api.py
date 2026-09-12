@@ -31,6 +31,20 @@ class SupportDirectoryPageSchema(Schema):
     total: int
 
 
+class StaffStudentOptionSchema(Schema):
+    """Bounded staff workflow student option with an opaque selection token."""
+
+    selection_token: str
+    label: str
+
+
+class StaffStudentOptionPageSchema(Schema):
+    items: list[StaffStudentOptionSchema]
+    page: int
+    page_size: int
+    total: int
+
+
 class SelfProfileSchema(Schema):
     user_id: int
     display_name: str
@@ -80,4 +94,26 @@ def profiles_support_directory(
         _actor(request),
         student_id=student_id,
         page=_page(page, page_size),
+    )
+
+
+@router.get(
+    "/staff-students/",
+    response=StaffStudentOptionPageSchema,
+    operation_id="profiles_staff_students",
+)
+def profiles_staff_students(
+    request,
+    q: str = "",
+    page: PageQuery = 1,
+    page_size: PageSizeQuery = 25,
+    workflow: str = "referral",
+):
+    """Scoped staff student search for supported workflow creation."""
+    prepare_api_operation(request, "profiles_staff_students")
+    return profiles_queries.staff_student_options_page(
+        _actor(request),
+        q=q,
+        page=_page(page, page_size),
+        workflow=workflow,
     )

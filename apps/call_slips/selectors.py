@@ -518,3 +518,59 @@ def _is_same_scheduled_appointment_reservation(call_slip: CallSlip, counselor, t
         tz,
     )
     return appointment_start == call_slip.scheduled_start_at and appointment_end == call_slip.scheduled_end_at
+def get_call_slip_counselor_options(actor, slip, *, q=None, page=None):
+    """Return scoped active counselor options for a Call Slip assign action.
+
+    Only counselors who are current, policy-eligible assign targets for this
+    Call Slip are disclosed. The returned selector is opaque and bound to the
+    requesting actor and this Call Slip.
+    """
+    from apps.access_control.display import safe_user_display_label
+    from apps.access_control.selection_tokens import issue_counselor_selection_token
+    from apps.accounts.models import RoleChoices, User
+    from apps.common.contracts import PageRequest, PageResult, page_queryset
+    from apps.call_slips.policies import (
+        can_assign_call_slip,
+        can_reassign_call_slip,
+        can_view_call_slip_sensitive_detail,
+    )
+
+    empty = PageResult((), page.page if page else 1, page.page_size if page else 25, 0)
+    if not can_view_call_slip_sensitive_detail(actor, slip):
+        return empty
+    if not (can_assign_call_slip(actor, slip) or can_reassign_call_slip(actor, slip)):
+        return empty
+
+    queryset = User.objects.filter(
+        is_active=True,
+        is_superuser=False,
+        role=RoleChoices.COUNSELOR,
+    ).order_by("last_name", "first_name", "pk")
+    search = " ".join(str(q or "").split())[:80]
+    if search:
+        queryset = queryset.filter(
+            Q(first_name__icontains=search) | Q(last_name__icontains=search)
+        )
+    allowed_ids = [
+        counselor.pk
+        for counselor in queryset
+        if can_assign_call_slip(actor, slip, counselor)
+        or can_reassign_call_slip(actor, slip, counselor)
+    ]
+    request = page or PageRequest()
+    paged = page_queryset(
+        queryset.filter(pk__in=allowed_ids),
+        request,
+        lambda counselor: {
+            "selection_token": issue_counselor_selection_token(
+                actor, "call_slip", slip.reference_code, counselor,
+            ),
+            "display_name": safe_user_display_label(counselor),
+        },
+    )
+    return PageResult(
+        items=tuple(item for item in paged["items"] if item is not None),
+        page=paged["page"],
+        page_size=paged["page_size"],
+        total=paged["total"],
+    )

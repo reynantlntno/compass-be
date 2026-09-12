@@ -141,3 +141,42 @@ def support_directory_page(
         page_size=page.page_size,
         total=total,
     ).as_dict()
+def staff_student_options_page(actor, *, q=None, page=None, workflow="referral") -> dict:
+    """Return a bounded, workflow-scoped student-selection page."""
+    from django.db.models import Q
+
+    from apps.access_control.display import office_student_display_label
+    from apps.access_control.student_selectors import (
+        issue_student_selection_token,
+        visible_students_for_workflow,
+    )
+    from apps.common.contracts import page_queryset
+
+    if workflow not in {"referral", "call_slip", "counseling_session"}:
+        raise ValidationError()
+
+    request = page or PageRequest()
+    queryset = visible_students_for_workflow(actor, workflow).select_related("user").order_by(
+        "user__last_name", "user__first_name", "user__pk",
+    )
+    search = " ".join(str(q or "").split())[:120]
+    if search:
+        queryset = queryset.filter(
+            Q(user__first_name__icontains=search)
+            | Q(user__last_name__icontains=search)
+            | Q(student_number__icontains=search)
+        )
+    paged = page_queryset(
+        queryset,
+        request,
+        lambda profile: {
+            "selection_token": issue_student_selection_token(actor, workflow, profile),
+            "label": office_student_display_label(profile),
+        },
+    )
+    return {
+        "items": tuple(item for item in paged["items"] if item is not None),
+        "page": paged["page"],
+        "page_size": paged["page_size"],
+        "total": paged["total"],
+    }

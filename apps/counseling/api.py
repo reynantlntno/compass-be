@@ -500,7 +500,10 @@ class ProviderWebhookResponseSchema(Schema):
 
 
 class SessionCreateSchema(Schema):
-    student_id: int
+    # ``student_id`` remains accepted for older trusted clients. New staff
+    # clients must use the opaque workflow-bound selection token instead.
+    student_id: int | None = None
+    student_selection_token: str | None = None
     appointment_reference: str | None = None
     assigned_counselor: int | None = None
     session_type: str
@@ -1011,11 +1014,47 @@ def get_session_or_404(actor, reference_code):
 )
 def create_session_route(request, payload: SessionCreateSchema):
     from apps.counseling.services import create_session
+    from apps.access_control.student_selectors import resolve_student_selection_token
 
     actor = _actor(request)
     create_data = _payload(payload)
+    student_id = create_data.get("student_id")
+    selection_token = str(create_data.get("student_selection_token") or "").strip()
+    has_student_id = student_id is not None
+    has_selection_token = bool(selection_token)
+    if has_student_id == has_selection_token:
+        raise ValidationError(
+            field_errors={
+                "student": [
+                    "Choose a student using one available selection method.",
+                ],
+            },
+        )
+    if has_selection_token:
+        if len(selection_token) > 500:
+            raise ValidationError(
+                field_errors={
+                    "student_selection_token": [
+                        "The student selection is no longer available.",
+                    ],
+                },
+            )
+        selected_profile = resolve_student_selection_token(
+            actor,
+            "counseling_session",
+            selection_token,
+        )
+        if selected_profile is None:
+            raise ValidationError(
+                field_errors={
+                    "student_selection_token": [
+                        "The student selection is no longer available.",
+                    ],
+                },
+            )
+        student_id = selected_profile.user_id
     command = SessionCreateCommand(
-        student_id=create_data["student_id"],
+        student_id=student_id,
         appointment_reference=create_data.get("appointment_reference"),
         assigned_counselor_id=create_data.get("assigned_counselor"),
         session_type=create_data["session_type"],

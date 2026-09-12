@@ -139,3 +139,54 @@ def actor_has_matching_directory_grant(actor, student_profile) -> bool:
     return _active_directory_organization_grants(grantee_id=actor.pk).filter(
         build_scope_match_q(student_profile, require_non_empty=True)
     ).exists()
+def select_staff_intake_students(actor):
+    """Return active student profiles within the actor's intake scope.
+
+    Intake search is limited to actors holding either queue-view capability and
+    scoped exactly like the Referral/Call Slip intake workflows: Head via the
+    fixed workflow capability, counselors via live coverage, GCO staff via an
+    active workflow-authority grant. Everyone else fails closed with an empty
+    queryset.
+    """
+    from apps.access_control.authority import has_capability, has_fixed_capability
+    from apps.access_control.rules import (
+        is_active_nonlegacy_actor,
+        is_counselor,
+        is_gco_staff,
+        is_it_admin,
+        is_student,
+    )
+    from apps.access_control.scopes import (
+        build_geographic_scope_q,
+        build_workflow_authority_scope_q,
+        get_live_counselor_coverages,
+    )
+
+    if not is_active_nonlegacy_actor(actor) or is_student(actor) or is_it_admin(actor):
+        return StudentProfile.objects.none()
+    if not (
+        has_capability(actor, Capability.REFERRALS_QUEUE_VIEW)
+        or has_capability(actor, Capability.CALL_SLIPS_QUEUE_VIEW)
+    ):
+        return StudentProfile.objects.none()
+    base = StudentProfile.objects.filter(
+        user__is_active=True, user__is_superuser=False, user__role=RoleChoices.STUDENT,
+    )
+    if has_fixed_capability(actor, Capability.REFERRALS_QUEUE_PROCESS) or has_fixed_capability(
+        actor, Capability.CALL_SLIPS_PREPARE
+    ):
+        return base
+    if is_counselor(actor):
+        coverage_q = build_geographic_scope_q(
+            get_live_counselor_coverages(actor),
+            {"campus": "campus", "college": "college", "department": "department", "program": "program"},
+        )
+        return base.filter(coverage_q)
+    if is_gco_staff(actor):
+        scope_q = build_workflow_authority_scope_q(
+            actor,
+            capability=Capability.REFERRALS_QUEUE_VIEW,
+            field_map={"campus": "campus", "college": "college", "department": "department", "program": "program"},
+        )
+        return base.filter(scope_q)
+    return StudentProfile.objects.none()

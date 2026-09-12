@@ -6,6 +6,7 @@ from datetime import date, datetime
 from ninja import Router, Schema
 
 from apps.call_slips import queries
+from apps.call_slips import queue as call_slips_queue
 from apps.call_slips.commands import (
     CallSlipAssignmentCommand,
     CallSlipAttendanceCommand,
@@ -65,6 +66,53 @@ class CallSlipQueueItemSchema(Schema):
 
 class CallSlipPageResultSchema(PageResultSchema):
     items: list[CallSlipQueueItemSchema]
+
+
+class CallSlipStaffQueueItemSchema(Schema):
+    """Staff queue projection for the Call Slips workspace.
+
+    Row scope and sensitive-field access remain owned by the existing Call Slip
+    selectors and policies; this schema is an explicit allowlist only.
+    """
+
+    reference_code: str
+    student_display_name: str
+    student_number: str | None = None
+    source_type: str
+    source_type_label: str
+    purpose_code: str
+    purpose_label: str
+    mode_code: str
+    mode_label: str
+    destination_code: str
+    destination_label: str
+    status: str
+    status_label: str
+    assignment_state: str
+    schedule_bucket: str
+    scheduled_start_at: datetime | None = None
+    scheduled_end_at: datetime | None = None
+    referral_reference: str | None = None
+    appointment_reference: str | None = None
+    issued_at: datetime | None = None
+    acknowledged_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CallSlipStaffQueuePageResultSchema(PageResultSchema):
+    items: list[CallSlipStaffQueueItemSchema]
+
+
+class CallSlipCounselorOptionSchema(Schema):
+    """Staff assign target represented by a short-lived opaque selector."""
+
+    selection_token: str
+    display_name: str
+
+
+class CallSlipCounselorOptionPageSchema(PageResultSchema):
+    items: list[CallSlipCounselorOptionSchema]
 
 
 class CallSlipDetailSchema(Schema):
@@ -162,7 +210,8 @@ class CallSlipMutationResponseSchema(Schema):
 
 
 class CallSlipDraftSchema(Schema):
-    student_id: int
+    student_id: int | None = None
+    student_selection_token: str | None = None
     source_type: str
     purpose_code: str
     destination_code: str
@@ -237,7 +286,8 @@ class CallSlipReasonSchema(Schema):
 
 
 class CallSlipAssignmentSchema(Schema):
-    target_counselor_id: int
+    target_counselor_id: int | None = None
+    counselor_selection_token: str | None = None
     reason_code: str
 
 
@@ -254,6 +304,44 @@ def _page(page: PageQuery, page_size: PageSizeQuery):
 
 def _data(payload):
     return payload.dict(exclude_unset=True) if payload is not None else {}
+
+
+def _resolve_student_id(actor, data: dict) -> int:
+    legacy_id = data.pop("student_id", None)
+    selection_token = data.pop("student_selection_token", None)
+    if legacy_id is not None and selection_token:
+        raise ValidationError()
+    if selection_token:
+        from apps.access_control.student_selectors import resolve_student_selection_token
+
+        profile = resolve_student_selection_token(actor, "call_slip", selection_token)
+        if profile is None:
+            raise ValidationError()
+        return profile.user_id
+    if isinstance(legacy_id, bool) or not isinstance(legacy_id, int) or legacy_id <= 0:
+        raise ValidationError()
+    return legacy_id
+
+
+def _resolve_counselor_assignment(actor, reference_code: str, data: dict) -> dict:
+    legacy_id = data.pop("target_counselor_id", None)
+    selection_token = data.pop("counselor_selection_token", None)
+    if legacy_id is not None and selection_token:
+        raise ValidationError()
+    if selection_token:
+        from apps.access_control.selection_tokens import resolve_counselor_selection_token
+
+        counselor = resolve_counselor_selection_token(
+            actor, "call_slip", reference_code, selection_token,
+        )
+        if counselor is None:
+            raise ValidationError()
+        data["target_counselor_id"] = counselor.pk
+    elif legacy_id is not None:
+        data["target_counselor_id"] = legacy_id
+    else:
+        raise ValidationError()
+    return data
 
 
 def _dt(value):
@@ -309,6 +397,67 @@ def _run(request, operation_id, payload, operation):
 def list_call_slips(request, page: PageQuery, page_size: PageSizeQuery):
     prepare_api_operation(request, "call_slips_list")
     return queries.scoped_call_slip_page(_actor(request), _page(page, page_size)).as_dict()
+
+
+@router.get("/queue/", response=CallSlipStaffQueuePageResultSchema, operation_id="call_slips_queue_list")
+def list_call_slip_queue(
+    request,
+    page: PageQuery,
+    page_size: PageSizeQuery,
+    q: str = "",
+    status: str = "",
+    academic_year: str = "",
+    assignment: str = "all",
+    purpose: str = "",
+    mode: str = "",
+    destination: str = "",
+    order: str = "recent",
+):
+    """Staff-facing Call Slips queue with bounded filters and an allowlist row."""
+    prepare_api_operation(request, "call_slips_queue_list")
+    return call_slips_queue.queue_page(
+        _actor(request),
+        _page(page, page_size),
+        query=q,
+        statuses=status,
+        academic_year=academic_year,
+        assignment=assignment,
+        purpose_codes=purpose,
+        mode_codes=mode,
+        destination_codes=destination,
+        order=order,
+    )
+
+
+@router.get(
+    "/{reference_code}/counselor-options/",
+    response=CallSlipCounselorOptionPageSchema,
+    operation_id="call_slips_counselor_options",
+)
+def call_slip_counselor_options(
+    request,
+    reference_code: str,
+    page: PageQuery,
+    page_size: PageSizeQuery,
+    q: str = "",
+):
+    prepare_api_operation(request, "call_slips_counselor_options")
+    from apps.call_slips.models import CallSlip
+    from apps.call_slips.selectors import (
+        get_call_slip_counselor_options,
+        get_operational_call_slip_sensitive_detail,
+    )
+
+    # The scoped sensitive-detail selector both authorizes the reader and
+    # confirms the reference without exposing existence to unauthorized callers.
+    if get_operational_call_slip_sensitive_detail(_actor(request), reference_code) is None:
+        raise NotFoundError()
+    slip = CallSlip.objects.filter(reference_code=str(reference_code or "").strip()).first()
+    if slip is None:
+        raise NotFoundError()
+    return get_call_slip_counselor_options(
+        _actor(request), slip, q=q, page=_page(page, page_size),
+    ).as_dict()
 
 
 @router.get(
@@ -410,6 +559,7 @@ def reschedule_detail(request, request_id: int):
 @router.post("/", response=CallSlipMutationResponseSchema, operation_id="call_slips_create")
 def create(request, payload: CallSlipDraftSchema):
     data = _data(payload)
+    data["student_id"] = _resolve_student_id(_actor(request), data)
     if data.get("referral_reference"):
         raise ValidationError("Referral-linked Call Slips must use the referral orchestration route.")
     command = CallSlipDraftCommand(**data)
@@ -442,13 +592,15 @@ def from_referral(request, payload: CallSlipFromReferralSchema):
 
 @router.post("/{reference_code}/assign/", response=CallSlipMutationResponseSchema, operation_id="call_slips_assign")
 def assign(request, reference_code: str, payload: CallSlipAssignmentSchema):
-    command = CallSlipAssignmentCommand(**_data(payload))
+    data = _resolve_counselor_assignment(_actor(request), reference_code, _data(payload))
+    command = CallSlipAssignmentCommand(**data)
     return _run(request, "call_slips_assign", _command_fingerprint(command, reference_code=reference_code), lambda: _outcome(assign_call_slip(_actor(request), reference_code, command)))
 
 
 @router.post("/{reference_code}/reassign/", response=CallSlipMutationResponseSchema, operation_id="call_slips_reassign")
 def reassign(request, reference_code: str, payload: CallSlipAssignmentSchema):
-    command = CallSlipAssignmentCommand(**_data(payload))
+    data = _resolve_counselor_assignment(_actor(request), reference_code, _data(payload))
+    command = CallSlipAssignmentCommand(**data)
     return _run(request, "call_slips_reassign", _command_fingerprint(command, reference_code=reference_code), lambda: _outcome(reassign_call_slip(_actor(request), reference_code, command)))
 
 
